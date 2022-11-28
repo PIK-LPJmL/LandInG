@@ -1,0 +1,26 @@
+Wheat
+Maize
+Rice
+Barley
+Rye
+Millet
+Sorghum
+Soybeans
+Sunflower
+Potatoes
+Cassava
+Sugar cane
+Sugar beet
+Oil palm
+Rape seed / Canola
+Groundnuts / Peanuts
+Pulses
+Citrus
+Date palm
+Grapes / Vine
+Cotton
+Cocoa
+Coffee
+Others perennial
+Fodder grasses
+Others annual

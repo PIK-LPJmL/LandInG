@@ -1,0 +1,47 @@
+################################################################################
+## Mapping between AQUASTAT crops and MIRCA2000 crops. May need to be updated ##
+## if either dataset has changed.                                             ##
+################################################################################
+"AQUASTAT","MIRCA"
+"Wheat","Wheat"
+"Rice","Rice"
+"Barley","Barley"
+"Maize","Maize"
+"Millet","Millet"
+"Sorghum","Sorghum"
+"Other cereals",
+"Vegetables",
+"Soybeans","Soybeans"
+"Groundnuts","Groundnuts / Peanuts"
+"Sesame",
+"Sunflower","Sunflower"
+"Potatoes","Potatoes"
+"Sweet potatoes",
+"Cassava","Cassava"
+"Other roots and tubers",
+"Leguminous crops",
+"Sugar beet","Sugar beet"
+"Sugarcane","Sugar cane"
+"Fodder",
+"Cotton","Cotton"
+"Flowers",
+"Tobacco",
+"Other crops (temporary)",
+"Plantains",
+"Bananas",
+"Citrus","Citrus"
+"Grapes","Grapes / Vine"
+"Other fruits",
+"Coconuts",
+"Olives",
+"Oil palm","Oil palm"
+"Coffee","Coffee"
+"Tea",
+"Cocoa beans","Cocoa"
+"Grass and Fodder",
+"Rubber",
+"Other crops (permanent)",
+"Rapeseed","Rape seed / Canola"
+"Papaya",
+"Strawberries",
+"Hop",
