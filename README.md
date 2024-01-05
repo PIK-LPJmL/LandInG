@@ -13,6 +13,9 @@ managed Land) and complements the
 [LPJmL model code release](https://github.com/PIK-LPJmL/LPJmL). This toolbox
 does *not* cover climate inputs.
 
+LandInG has been documented in the following publication: 
+Ostberg, S., Müller, C., Heinke, J., and Schaphoff, S.: LandInG 1.0: a toolbox to derive input datasets for terrestrial ecosystem modelling at variable resolutions from heterogeneous sources, Geosci. Model Dev., 16, 3375–3406, https://doi.org/10.5194/gmd-16-3375-2023, 2023
+
 All source code, configuration and parameter files are subject to 
 Copyright (C) by the Potsdam Institute for Climate Impact Research (PIK), see
 the file COPYRIGHT, and are licensed under the GNU AFFERO GENERAL PUBLIC LICENSE
