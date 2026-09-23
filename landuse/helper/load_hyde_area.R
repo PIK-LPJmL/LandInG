@@ -8,138 +8,161 @@
 ################################################################################
 
 ################################################################################
-## Function to load and gap-fill HYDE area                                    ##
+## Function to load and gap-fill HYDE (or any alternative) area dataset       ##
 ## Parameters:                                                                ##
 ## filename: Raster file providing cell area grid                             ##
 ## fileunits: Spatial area unit used in filename                              ##
-## faounits: Spatial area unit used in FAOSTAT data (used for return value of ##
-##           this function)                                                   ##
-## unitraster: Raster object exemplifying finest resolution used; HYDE area   ##
-##             is aggregated to that resolution if necessary. Set to NULL to  ##
-##             get HYDE area in source resolution, but still converted to     ##
-##             faounits                                                       ##
-## gextent: Extent object used for comparison, normally use global_extent     ##
+## return_units: Spatial area unit used for return value of this function     ##
+## return_raster: SpatRaster exemplifying finest resolution used; HYDE area   ##
+##                is aggregated to that resolution if necessary. Set to NULL  ##
+##                to get HYDE area in source resolution, but still converted  ##
+##                to return_units                                             ##
+## earth_radius: Earth radius to use in calc_cellarea function                ##
+## gextent: SpatExtent object used for comparison, normally use global_extent ##
 ################################################################################
 load_hyde_area <- function(filename,
-                           fileunits = hyde_area_file_units,
-                           faounits = fao_area_units,
-                           unitraster = gadm_raster,
-                           gextent = global_extent
+                           fileunits,
+                           return_units,
+                           return_raster,
+                           earth_radius,
+                           gextent
                           ) {
-  cat("Loading HYDE area from", sQuote(filename), "\n")
-  # Load and convert to FAOSTAT units.
-  hyde_area <- raster(filename) * ud.convert(1, fileunits, faounits)
+  cat("Loading cell area from", sQuote(filename), "\n")
+  # Load and convert to return unit.
+  hyde_area <- terra::rast(filename) *
+    units::ud_convert(1, fileunits, return_units)
   # Check spatial extent
   if (matching_extent(
-    extent(hyde_area),
+    terra::ext(hyde_area),
     gextent,
-    xres(hyde_area),
-    yres(hyde_area)
+    terra::xres(hyde_area),
+    terra::yres(hyde_area)
   )) {
-    hyde_area <- setExtent(hyde_area, gextent)
+    terra::ext(hyde_area) <- gextent
   }
-  if (!is.null(unitraster) && !matching_extent(
-    extent(hyde_area),
-    extent(unitraster),
-    xres(hyde_area),
-    yres(hyde_area))
+  if (!is.null(return_raster) &&
+    !matching_extent(
+      terra::ext(hyde_area),
+      terra::ext(return_raster),
+      terra::xres(hyde_area),
+      terra::yres(hyde_area)
+    )
   ) {
-    stop("Spatial units and HYDE area have different spatial extent")
+    stop("Return units and area data have different spatial extent")
   }
   # HYDE area only has values in its landmask, fill globally.
-  if (anyNA(values(hyde_area))) {
+  if (anyNA(terra::values(hyde_area))) {
     # Fill band-wise. This assumes that all cells in one latitude band have the
     # same area.
     # Confirm that bands have one unique value
     if (any(
-      apply(as.array(hyde_area), 1, function(indata) {
-        ifelse(all(is.na(indata)), 1, length(unique(na.omit(indata))))
-      }) != 1)
+      apply(
+        terra::as.array(hyde_area),
+        1,
+        function(x) ifelse(all(is.na(x)), 1, length(unique(na.omit(x))))
+      ) != 1
+    )
     ) {
-      stop("HYDE area has multiple values per latitude band. Cannot gap-fill.")
+      stop("Area data has multiple values per latitude band. Cannot gap-fill.")
     }
-    values(hyde_area) <- rep(
-      apply(as.array(hyde_area), 1, function(indata) {
-        ifelse(all(is.na(indata)), NA, unique(na.omit(indata)))
-      }),
-      each = ncol(hyde_area)
+    terra::set.values(
+      hyde_area,
+      cells = seq_len(terra::ncell(hyde_area)),
+      values = rep(
+        apply(
+          terra::as.array(hyde_area),
+          1,
+          function(x) ifelse(all(is.na(x)), NA, unique(na.omit(x)))
+        ),
+        each = terra::ncol(hyde_area)
+      )
     )
     # Check if there are still empty rows
-    emptyrows <- apply(as.array(hyde_area), 1, function(indata) {
-      all(is.na(indata))
-    })
+    emptyrows <- apply(terra::as.array(hyde_area), 1, function(x) all(is.na(x)))
     for (r in which(emptyrows)) {
       # Check mirrored band
-      opposite <- which(abs(-yFromRow(hyde_area, r) - yFromRow(hyde_area)) <
-        yres(hyde_area) * 0.001        
+      opposite <- which(
+        abs(-terra::yFromRow(hyde_area, r) - terra::yFromRow(hyde_area)) <
+          terra::yres(hyde_area) * 0.001
       )
       if (length(opposite) == 1 && !opposite %in% which(emptyrows)) {
-        hyde_area[cellFromRow(hyde_area, r)] <-
-          hyde_area[cellFromRow(hyde_area, opposite)]
+        hyde_area[r, ] <-
+          hyde_area[opposite, ]
       }
     }
     # Check again if there are still empty rows
-    emptyrows <- apply(as.array(hyde_area), 1, function(indata) {
-      all(is.na(indata))
-    })
+    emptyrows <- apply(terra::as.array(hyde_area), 1, function(x) all(is.na(x)))
     if (any(emptyrows)) {
-      # Still missing values, fill using cellarea() function from
-      # helper_functions.R
-      hyde_area[cellFromRow(hyde_area, which(emptyrows))] <- rep(
-        ud.convert(
-          cellarea(
-            yFromRow(hyde_area, which(emptyrows)),
-            xres(hyde_area),
-            yres(hyde_area)
-          ), # cellarea returns area in m2
-          "m2",
-          faounits
+      # Still missing values, fill using calc_cellarea() function from lpjmlkit
+      hyde_area[which(emptyrows), ] <- rep(
+        lpjmlkit::calc_cellarea(
+          terra::yFromRow(hyde_area, which(emptyrows)),
+          terra::xres(hyde_area),
+          terra::yres(hyde_area),
+          earth_radius = earth_radius,
+          return_unit = "m2"
         ),
-        each = ncol(hyde_area)
-      )
+        each = terra::ncol(hyde_area)
+      ) * units::ud_convert(1, "m2", return_units)
     }
   }
-  # Aggregate to spatial resolution of unitraster if necessary.
-  if (!is.null(unitraster) && any(res(hyde_area) < res(unitraster))) {
-    hyde2gadm <- round(res(hyde_area) / res(unitraster), 4)
+  # Aggregate to spatial resolution of return_raster if necessary.
+  if (
+    !is.null(return_raster) &&
+      any(terra::res(hyde_area) < terra::res(return_raster))
+  ) {
+    hyde2gadm <- round(terra::res(return_raster) / terra::res(hyde_area), 4)
     if (max(hyde2gadm %% 1) != 0) {
       stop(
-        "Target resolution ", toString(round(res(unitraster), 5)),
-        " is not an integer multiple of HYDE resolution ",
-        toString(round(res(hyde_area), 5)), "\n",
+        "Target resolution ", toString(round(terra::res(return_raster), 5)),
+        " is not an integer multiple of source resolution ",
+        toString(round(terra::res(hyde_area), 5)), "\n",
         "Cannot aggregate."
       )
     }
-    # Calculate global sum to check after aggregation
-    areasum <- cellStats(hyde_area, sum, na.rm = TRUE)
-    # Aggregate
-    hyde_area <- aggregate(hyde_area, hyde2gadm)
-    if (areasum != cellStats(hyde_area, sum, na.rm = TRUE)) {
-      stop("Error aggregating hyde_area")
+    if (any(hyde2gadm > 1)) {
+      # Calculate global sum to check after aggregation
+      areasum <- ul(terra::global(hyde_area, "sum", na.rm = TRUE))
+      # Aggregate
+      hyde_area <- terra::aggregate(
+        hyde_area,
+        fact = rev(hyde2gadm), # res() returns lon/lat, fact is lat/lon
+        fun = "sum",
+        na.rm = TRUE
+      )
+      if (
+        !isTRUE(
+          all.equal(areasum, ul(terra::global(hyde_area, "sum", na.rm = TRUE)))
+        )
+      ) {
+        stop("Error aggregating hyde_area")
+      }
     }
-  } else if (!is.null(unitraster) &&
-      any(res(hyde_area) / res(unitraster) > 1.00001)
+  } else if (
+    !is.null(return_raster) &&
+      any(terra::res(hyde_area) / terra::res(return_raster) > 1.00001)
   ) {
     stop(
-      "Target resolution ", toString(round(res(unitraster), 5)),
-      " is finer than HYDE resolution ",
-      toString(round(res(hyde_area), 5)), "\n",
+      "Target resolution ", toString(round(terra::res(return_raster), 5)),
+      " is finer than source resolution ",
+      toString(round(terra::res(hyde_area), 5)), "\n",
       "Output resolution cannot be finer than any gridded source data."
     )
-  } else if (!is.null(unitraster)) {
+  } else if (!is.null(return_raster)) {
     hyde2gadm <- c(1, 1)
   } else {
     message(
-      "Info: HYDE area is returned in its native resolution because you have ",
-      "not supplied a unitraster argument. hyde2gadm is set to NULL."
+      "Info: area is returned in its native resolution because you have ",
+      "not supplied a return_raster argument. hyde2gadm is set to NULL."
     )
-    if (ud.convert(1, fileunits, faounits) != 1) {
+    if (units::ud_convert(1, fileunits, return_units) != 1) {
       message(
-        "Still converting HYDE area from ", sQuote(fileunits),
-        " to ", sQuote(faounits)
+        "Still converting area from ", sQuote(fileunits),
+        " to ", sQuote(return_units)
       )
     }
     hyde2gadm <- NULL
   }
-  list(area = hyde_area, unit = faounits, hyde2gadm = hyde2gadm)
+  terra::units(hyde_area) <- return_units
+  list(area = hyde_area, unit = return_units, hyde2gadm = hyde2gadm)
 }

@@ -13,18 +13,19 @@
 ## spatial units, usually administrative units, specified as input.           ##
 ##                                                                            ##
 ## Parameters:                                                                ##
-## filedata: RasterBrick or RasterLayer providing spatial pattern to fill,    ##
-##           may include additional band specifying data source.              ##
+## filedata: SpatRaster providing spatial pattern to fill, may include        ##
+##           additional band specifying data source.                          ##
 ## strip_zero: Whether to replace 0 with NA in filedata.                      ##
-## unit_raster: RasterLayer or RasterBrick containing spatial units used for  ##
-##              gap-filling. Must include at least national level, can also   ##
-##              include subnational levels. Code expects 1 or 3 levels.       ##
+## unit_raster: SpatRaster containing spatial units used for gap-filling.     ##
+##              Must include at least national level, can also include        ##
+##              levels. Code expects 1 or 3 levels.                           ##
+## gextent: SpatExtent object giving global extent
 ## unit_raster_names: Optional data.frame providing names and ISO codes       ##
 ##                    matching IDs used in unit_raster. Used for GADM levels. ##
-## unit_border_raster: Optional RasterLayer or RasterBrick providing the      ##
-##                     number of unique admin units in each grid cell. Used   ##
-##                     determine border cells. Number of bands must be 1 or   ##
-##                     equal to number of bands in unit_raster.               ##
+## unit_border_raster: Optional SpatRaster providing the number of unique     ##
+##                     admin units in each grid cell. Used to determine       ##
+##                     border cells. Number of bands must be 1 or equal to    ##
+##                     number of bands in unit_raster.                        ##
 ## assign_grid_threshold: Minimum number of source cells required to use      ##
 ##                        value for admin unit. Accounts for possible         ##
 ##                        inconsistencies between admin masks used. Set to 1  ##
@@ -43,10 +44,10 @@
 ## is_national: Whether source data is national or subnational. Subnational   ##
 ##              gap-filling is only possible if unit_raster provides          ##
 ##              subnational units.                                            ##
-## fert_band: Band number of fertilizer data in filedata if it is a           ##
-##            RasterBrick. Defaults to NULL if filedata is RasterLayer.       ##
-## source_band: Band number of source information in filedata if it is a      ##
-##              RasterBrick. Defaults to NULL if filedata does not include    ##
+## fert_band: Band number of fertilizer data in filedata if it is a multi-    ##
+##            band SpatRaster. Defaults to NULL if filedata is single layer   ##
+## source_band: Band number of source information in filedata if it has       ##
+##              multiple bands. Defaults to NULL if filedata does not include ##
 ##              source information.                                           ##
 ## source_country_vals: Values in optional source band that denote grid cells ##
 ##                      with national values (as opposed to subnational       ##
@@ -66,6 +67,7 @@ gapfill_pattern <- function(filedata,
                             # values
                             strip_zero,
                             unit_raster,
+                            gextent,
                             unit_raster_names = NULL,
                             unit_border_raster = NULL,
                             assign_grid_threshold = 5,
@@ -81,17 +83,17 @@ gapfill_pattern <- function(filedata,
                             # Whether to print warning statements
                             verbose = TRUE
                            ) {
-  if (!class(filedata) %in% c("RasterLayer", "RasterBrick")) {
+  if (!is(filedata, "SpatRaster")) {
     stop(
-      "file data must be a RasterLayer or RasterBrick.",
+      "file data must be a SpatRaster.",
       "\nProvided: ", class(filedata)
     )
   }
-  if (class(filedata) == "RasterLayer" &&
-    ((!is.null(fert_band) && (any(fert_band > 1) || length(fert_band) > 1)) ||
-    !is.null(source_band))
+  if (terra::nlyr(filedata) == 1 &&
+      ((!is.null(fert_band) && (any(fert_band > 1) || length(fert_band) > 1)) ||
+         !is.null(source_band))
   ) {
-    # RasterLayer only has one band by definition, cannot access more.
+    # SpatRaster only has one band.
     stop(
       "Provided values for fert_band ",
       sQuote(ifelse(is.null(fert_band), "NULL", toString(fert_band))),
@@ -100,11 +102,11 @@ gapfill_pattern <- function(filedata,
       " do not match filedata"
     )
   }
-  if (class(filedata) == "RasterBrick" &&
-    ((is.null(fert_band) || any(fert_band > nlayers(filedata))) ||
-    (!is.null(source_band) && any(source_band > nlayers(filedata))))
+  if (terra::nlyr(filedata) > 1 &&
+      ((is.null(fert_band) || any(fert_band > terra::nlyr(filedata))) ||
+         (!is.null(source_band) && any(source_band > terra::nlyr(filedata))))
   ) {
-    # Cannot access any bands that are not included in RasterBrick
+    # Cannot access any bands that are not included in SpatRaster.
     stop(
       "Provided values for fert_band ",
       sQuote(ifelse(is.null(fert_band), "NULL", toString(fert_band))),
@@ -115,12 +117,13 @@ gapfill_pattern <- function(filedata,
   }
   # Check that fert_band and source_band are not identical
   if (!is.null(fert_band) && !is.null(source_band) &&
-    length(intersect(fert_band, source_band)) > 0) {
+      length(intersect(fert_band, source_band)) > 0
+  ) {
     stop("fert_band and source_band must not have same value")
   }
   # Check that fert_band and source_band have same length
   if (!is.null(fert_band) && !is.null(source_band) &&
-    length(fert_band) != length(source_band)
+      length(fert_band) != length(source_band)
   ) {
     stop(
       "fert_band and source_band must have same length or source_band must ",
@@ -131,27 +134,27 @@ gapfill_pattern <- function(filedata,
   if (is.null(fert_band))
     fert_band <- 1
   # Check type of unit_raster
-  if (!class(unit_raster) %in% c("RasterLayer", "RasterBrick")) {
+  if (!is(unit_raster, "SpatRaster")) {
     stop(
-      "unit_raster must be a RasterLayer or RasterBrick.",
+      "unit_raster must be a SpatRaster.",
       "\nProvided: ", class(unit_raster)
     )
   }
   # Check that non-missing grid cells are the same in all bands of unit_raster
-  if (class(unit_raster) == "RasterBrick" && nlayers(unit_raster) > 1) {
-    for (l in seq(2, nlayers(unit_raster))) {
+  if (terra::nlyr(unit_raster) > 1) {
+    for (l in seq(2, terra::nlyr(unit_raster))) {
       if (!identical(
-        is.na(values(subset(unit_raster, l))),
-        is.na(values(subset(unit_raster, 1)))
+        is.na(ul(terra::values(unit_raster[[l]]))),
+        is.na(ul(terra::values(unit_raster[[1]])))
       )) {
         stop(
-          "Land mask in layer", l, "of unit_raster differs from layer 1.",
+          "Land mask in layer ", l, " of unit_raster differs from layer 1.",
           "\nPlease make sure all admin layers use the same land mask."
         )
       }
     }
   }
-  if (!is_national && nlayers(unit_raster) == 1 && verbose) {
+  if (!is_national && terra::nlyr(unit_raster) == 1 && verbose) {
     warning(
       "You have stated that your filedata has ",
       "subnational data (is_national == FALSE) but have only provided one ",
@@ -159,27 +162,27 @@ gapfill_pattern <- function(filedata,
       immediate. = TRUE
     )
   }
-  if (is_national && nlayers(unit_raster) > 1 && verbose) {
+  if (is_national && terra::nlyr(unit_raster) > 1 && verbose) {
     warning(
       "You have stated that your filedata is ",
-      "national but have supplied ", nlayers(unit_raster), " levels of admin ",
-      "data in unit_raster. Ignoring subnational levels.",
+      "national but have supplied ", terra::nlyr(unit_raster),
+      " levels of admin data in unit_raster. Ignoring subnational levels.",
       immediate. = TRUE
     )
   }
-  if (nlayers(unit_raster) > 3 && verbose) {
+  if (terra::nlyr(unit_raster) > 3 && verbose) {
     warning(
-      "unit_raster has ", nlayers(unit_raster),
+      "unit_raster has ", terra::nlyr(unit_raster),
       " layers but this code normally assumes at most 3.\n",
       "Gap-fill status codes will not be comparable with datasets that use",
       "fewer admin levels.",
       immediate. = TRUE
     )
   }
-  unit_levels <- max(3, nlayers(unit_raster))
-  if (nlayers(unit_raster) == 2 && verbose) {
+  unit_levels <- max(3, terra::nlyr(unit_raster))
+  if (terra::nlyr(unit_raster) == 2 && verbose) {
     warning(
-      "unit_raster has ", nlayers(unit_raster),
+      "unit_raster has ", terra::nlyr(unit_raster),
       " layers but this code normally assumes 1 or 3 layers.\n",
       "Assuming that layers correspond to admin level 1 and 0.",
       immediate. = TRUE
@@ -187,7 +190,7 @@ gapfill_pattern <- function(filedata,
   }
   if (unit_levels > 3 && verbose) {
     warning(
-      "unit_raster has ", nlayers(unit_raster),
+      "unit_raster has ", terra::nlyr(unit_raster),
       " layers but this code normally assumes 1 or 3 layers.\n",
       "Gap-fill status codes may not be comparable with datasets that use ",
       "only national or 3 admin layers.",
@@ -195,16 +198,14 @@ gapfill_pattern <- function(filedata,
     )
   }
   # Border layer
-  if (!is.null(unit_border_raster) &&
-    !class(unit_border_raster) %in% c("RasterBrick", "RasterLayer")
-  ) {
+  if (!is.null(unit_border_raster) && !is(unit_border_raster, "SpatRaster")) {
     stop(
-      "unit_border_raster must be a RasterBrick or RasterLayer.",
+      "unit_border_raster must be a SpatRaster.",
       "\nProvided:", class(unit_border_raster)
     )
   }
-  if (!is.null(unit_border_raster) && nlayers(unit_border_raster) != 1 &&
-    nlayers(unit_border_raster) != nlayers(unit_raster)
+  if (!is.null(unit_border_raster) && terra::nlyr(unit_border_raster) != 1 &&
+      terra::nlyr(unit_border_raster) != terra::nlyr(unit_raster)
   ) {
     # Either use one border layer for all admin layers or one border layer per
     # admin layer.
@@ -213,20 +214,13 @@ gapfill_pattern <- function(filedata,
   # Check that unit_raster and unit_border_raster have same spatial
   # characteristics.
   if (!is.null(unit_border_raster) &&
-    (any(extent(unit_border_raster) != extent(unit_raster)) ||
-    any(res(unit_border_raster) != res(unit_raster)))
+      (any(terra::ext(unit_border_raster) != terra::ext(unit_raster)) ||
+         any(terra::res(unit_border_raster) != terra::res(unit_raster)))
   ) {
     stop(
       "Spatial characteristics do not match between unit_border_raster and ",
       "unit_raster"
     )
-  }
-  if (class(unit_border_raster) == "RasterBrick" &&
-    nlayers(unit_border_raster) == 1
-  ) {
-    # Convert RasterBrick to RasterLayer because single-layer brick causes
-    # problems in raster package code.
-    unit_border_raster <- subset(unit_border_raster, 1)
   }
 
   # Check optional data frame with unit names
@@ -240,7 +234,7 @@ gapfill_pattern <- function(filedata,
       ignore.case = TRUE,
       value = TRUE
     )
-    if (length(value_cols) != nlayers(unit_raster)) {
+    if (length(value_cols) != terra::nlyr(unit_raster)) {
       stop("unit_raster_names does not match unit_raster")
     }
     code_cols <- grep(
@@ -249,12 +243,12 @@ gapfill_pattern <- function(filedata,
       ignore.case = TRUE,
       value = TRUE
     )
-    if (length(code_cols) != nlayers(unit_raster)) {
+    if (length(code_cols) != terra::nlyr(unit_raster)) {
       stop("Error detecting code columns in unit_raster_names")
     }
     for (l in seq_along(value_cols)) {
       mismatch <- setdiff(
-        values(subset(unit_raster, l)),
+        ul(terra::values(unit_raster[[l]])),
         unit_raster_names[, value_cols[l]]
       )
       if (length(mismatch) > 1 && !all(is.na(mismatch))) {
@@ -270,14 +264,14 @@ gapfill_pattern <- function(filedata,
       apply(
         unit_raster_names[, value_cols, drop = FALSE],
         2,
-        function(indata) length(unique(indata))
+        function(x) length(unique(x))
       ),
       decreasing = TRUE
     )
   } else {
     # Derive layer order based on the number of unique codes in each layer
     unit_raster_order <- order(
-      cellStats(unit_raster, function(indata, na.rm) length(unique(indata))),
+      sapply(terra::unique(unit_raster, incomparables = TRUE), length),
       decreasing = TRUE
     )
   }
@@ -286,21 +280,21 @@ gapfill_pattern <- function(filedata,
 
   # Check if filedata is global
   if (matching_extent(
-    extent(filedata),
-    global_extent,
-    xres(filedata),
-    yres(filedata)
+    terra::ext(filedata),
+    gextent,
+    terra::xres(filedata),
+    terra::yres(filedata)
   )) {
-    filedata <- setExtent(filedata, global_extent)
+    terra::ext(filedata) <- gextent
   }
-  # Adjust unit_raster if it has higher resolution than filedata
+  # Adjust unit_raster if it has higher resolution than filedata.
   unit_raster <- match_admin_to_data(
     filedata,
     unit_raster,
     fun = modal_ties_first,
     verbose = verbose
   )
-  # Adjust unit_border_raster if it has higher resolution than filedata
+  # Adjust unit_border_raster if it has higher resolution than filedata.
   if (!is.null(unit_border_raster)) {
     unit_border_raster <- match_admin_to_data(
       filedata,
@@ -309,21 +303,29 @@ gapfill_pattern <- function(filedata,
       verbose = verbose
     )
   }
-  # Check if unit_raster covers full filedata
-  if (xmin(unit_raster) - xmin(filedata) > xres(filedata) * 0.01 ||
-    xmax(filedata) - xmax(unit_raster) > xres(filedata) * 0.01 ||
-    ymin(unit_raster) - ymin(filedata) > yres(filedata) * 0.01 ||
-    ymax(filedata) - ymax(unit_raster) > yres(filedata) * 0.01
+  # Check if unit_raster covers full filedata.
+  if (terra::xmin(unit_raster) - terra::xmin(filedata) > terra::xres(filedata) *
+      0.01 ||
+      terra::xmax(filedata) - terra::xmax(unit_raster) > terra::xres(filedata) *
+        0.01 ||
+      terra::ymin(unit_raster) - terra::ymin(filedata) > terra::yres(filedata) *
+        0.01 ||
+      terra::ymax(filedata) - terra::ymax(unit_raster) > terra::yres(filedata) *
+        0.01
   ) {
     # Crop filedata to spatial extent of unit_raster
     cat("Cropping filedata to smaller spatial extent of unit_raster\n")
-    filedata <- crop(filedata, unit_raster)
+    filedata <- terra::crop(filedata, unit_raster)
   }
   # Check if filedata covers full unit_raster
-  if (xmin(filedata) - xmin(unit_raster) > xres(filedata) * 0.01 ||
-    xmax(unit_raster) - xmax(filedata) > xres(filedata) * 0.01 ||
-    ymin(filedata) - ymin(unit_raster) > yres(filedata) * 0.01 ||
-    ymax(unit_raster) - ymax(filedata) > yres(filedata) * 0.01
+  if (terra::xmin(filedata) - terra::xmin(unit_raster) > terra::xres(filedata) *
+      0.01 ||
+      terra::xmax(unit_raster) - terra::xmax(filedata) > terra::xres(filedata) *
+        0.01 ||
+      terra::ymin(filedata) - terra::ymin(unit_raster) > terra::yres(filedata) *
+        0.01 ||
+      terra::ymax(unit_raster) - terra::ymax(filedata) > terra::yres(filedata) *
+        0.01
   ) {
     # Extend filedata to cover full spatial extent of unit_raster
     if (verbose) {
@@ -335,40 +337,40 @@ gapfill_pattern <- function(filedata,
         immediate. = TRUE
       )
     }
-    filedata <- extend(filedata, unit_raster, value = NA)
+    filedata <- terra::extend(filedata, unit_raster, fill = NA)
   }
   # Check if spatial resolutions match
-  file2unit <- res(filedata) / res(unit_raster)
+  file2unit <- terra::res(filedata) / terra::res(unit_raster)
   # Split filedata into fertilizer band and source band
   sourcedata <- NULL
-  if (class(filedata) == "RasterBrick") {
+  if (terra::nlyr(filedata) > 1) {
     # Extract source_band
     if (!is.null(source_band)) {
-      sourcedata <- subset(filedata, source_band)
+      sourcedata <- terra::subset(filedata, source_band)
       if (strip_zero) {
         # Replace 0 by NA
-        sourcedata <- mask(sourcedata, sourcedata, maskvalue = 0)
+        sourcedata <- terra::mask(sourcedata, sourcedata, maskvalues = 0)
       }
       # Mueller et al. NetCDF files use NaN as defined missing value which
       # causes errors when trying to access individual cell values. Reset.
-      if (is.na(NAvalue(sourcedata))) {
-        NAvalue(sourcedata) <- 1e20
+      if (is.na(terra::NAflag(sourcedata))) {
+        terra::NAflag(sourcedata) <- 1e20
       }
     }
     # Reduce filedata to fert_band
-    filedata <- subset(filedata, fert_band)
+    filedata <- terra::subset(filedata, fert_band)
     if (strip_zero) {
       # Replace 0 by NA
-      filedata <- mask(filedata, filedata, maskvalue = 0)
+      filedata <- terra::mask(filedata, filedata, maskvalues = 0)
     }
   } else if (strip_zero) {
     # Replace 0 by NA
-    filedata <- mask(filedata, filedata, maskvalue = 0)
+    filedata <- terra::mask(filedata, filedata, maskvalues = 0)
   }
   # Mueller et al. NetCDF files use NaN as defined missing value which
   # causes errors when trying to access individual cell values. Reset.
-  if (is.na(NAvalue(filedata))) {
-    NAvalue(filedata) <- 1e20
+  if (is.na(terra::NAflag(filedata))) {
+    terra::NAflag(filedata) <- 1e20
   }
   if (any(file2unit < 0.999)) {
     if (verbose) {
@@ -383,15 +385,20 @@ gapfill_pattern <- function(filedata,
     scale_unit <- ifelse(scale_unit > 1, scale_unit, 1)
     scale_unit <- round(scale_unit)
     # Use mean over source grid cells
-    filedata <- aggregate(filedata, scale_unit, mean)
+    filedata <- terra::aggregate(filedata, rev(scale_unit), "mean", na.rm = TRUE)
     # In Mueller et al. data, low source values denote data from
     # higher-resolution source, higher values from lower-resolution source.
     # Aggregate source data using highest value.
     if (!is.null(sourcedata)) {
-      sourcedata <- aggregate(sourcedata, scale_unit, max)
+      sourcedata <- terra::aggregate(
+        sourcedata,
+        rev(scale_unit), # res() returns lon/lat, fact is lat/lon
+        "max",
+        na.rm = TRUE
+      )
     }
     # Update spatial scaling factor
-    file2unit <- res(filedata) / res(unit_raster)
+    file2unit <- terra::res(filedata) / terra::res(unit_raster)
     if (any(file2unit > 1.001 & file2unit %% 1 > 0.001)) {
       stop("Resolution of filedata is not an integer multiple of unit_raster")
     }
@@ -399,12 +406,12 @@ gapfill_pattern <- function(filedata,
       stop("Resolution of unit_raster is not an integer multiple of filedata")
     }
   }
-  if (ncell(unit_raster) != ncell(filedata)) {
+  if (terra::ncell(unit_raster) != terra::ncell(filedata)) {
     stop(
       "Error matching spatial extent and resolution of filedata and unit_raster"
     )
   }
-  
+
   if (assign_grid_threshold < 1) {
     if (verbose) {
       warning("assign_grid_threshold cannot be < 1.", immediate. = TRUE)
@@ -431,43 +438,49 @@ gapfill_pattern <- function(filedata,
   output_filedata <- filedata
   # Gap-filling information
   # Admin level used for gap-filling
-  output_gapfillstats <- brick(filedata, nl = length(fert_band))
-  output_gapfillstats[] <- NA
+  output_gapfillstats <- terra::rast(
+    filedata,
+    nlyrs = length(fert_band),
+    vals = NA
+  )
   # Number of cells/countries used for gap-filling
-  output_gapfillsources <- brick(filedata, nl = length(fert_band))
-  output_gapfillsources[] <- NA
+  output_gapfillsources <- terra::rast(
+    filedata,
+    nlyrs = length(fert_band),
+    vals = NA
+  )
   # Load raster objects into memory to speed up processing. Comment this part if
   # your system does not have enough memory.
-  if (!inMemory(unit_raster) && ncell(unit_raster) < 1e8) {
-    unit_raster <- readAll(unit_raster)
+  if (!terra::inMemory(unit_raster) && terra::ncell(unit_raster) < 1e8) {
+    unit_raster<- terra::toMemory(unit_raster)
   }
-  if (!is.null(unit_border_raster) && !inMemory(unit_border_raster) &&
-    ncell(unit_border_raster) < 1e8
+  if (!is.null(unit_border_raster) && !terra::inMemory(unit_border_raster) &&
+      terra::ncell(unit_border_raster) < 1e8
   ) {
-    unit_border_raster <- readAll(unit_border_raster)
+    unit_border_raster <- unit_border_raster * 1
   }
-  
+
   # Process each fert_band individually.
   for (band in seq_along(fert_band)) {
     if (length(fert_band) > 1 && verbose)
       cat("+++ Processing band", band, "of", length(fert_band), "+++\n")
 
     # Extract current band from input and output variables
-    band_stats <- values(subset(output_gapfillstats, band))
-    band_data <- values(subset(filedata, band))
+    band_stats <- ul(terra::values(output_gapfillstats[[band]]))
+    band_data <- ul(terra::values(filedata[[band]]))
     if (!is.null(sourcedata)) {
-      band_source <- values(subset(sourcedata, band))
+      band_source <- ul(terra::values(sourcedata[[band]]))
     } else {
       band_source <- NULL
     }
-    band_gapfillsources <- values(subset(output_gapfillsources, band))
-    output_band_data <- values(subset(output_filedata, band))
+    band_gapfillsources <- ul(terra::values(output_gapfillsources[[band]]))
+    output_band_data <- ul(terra::values(output_filedata[[band]]))
 
     # Mask out any cells in output_filedata that may be located outside of land
     # according to unit_raster
     outside_valid <- intersect(
       which(!is.na(band_data)),
-      which(is.na(values(subset(unit_raster, 1))))
+      which(is.na(ul(terra::values(unit_raster[[1]]))))
     )
     if (length(outside_valid) > 0) {
       output_band_data[outside_valid] <- NA
@@ -482,13 +495,13 @@ gapfill_pattern <- function(filedata,
     # Find missing and non-missing cells in filedata
     missing_cells <- intersect(
       which(is.na(band_data)),
-      which(!is.na(values(subset(unit_raster, 1))))
+      which(!is.na(ul(terra::values(unit_raster[[1]]))))
     )
     valid_cells <- intersect(
       which(!is.na(band_data)),
-      which(!is.na(values(subset(unit_raster, 1))))
+      which(!is.na(ul(terra::values(unit_raster[[1]]))))
     )
-    
+
     # Table with country values, used to calculate country group averages
     if (!is.null(unit_raster_names)) {
       # Find columns in unit_raster_names containing country IDs and ISO codes.
@@ -518,20 +531,15 @@ gapfill_pattern <- function(filedata,
       )
     } else {
       # All country codes from raster
-      isocode <- na.omit(
-        cellStats(
-          subset(unit_raster, unit_raster_order[length(unit_raster_order)]),
-          unique
-        )
-      )
+      isocode <- ul(terra::unique(unit_raster[[tail(unit_raster_order, n = 1)]]))
       country_avg_table <- data.frame(
         code = formatC(isocode, format = "d"),
         apprate = rep(NA, length(isocode)),
         nsource = rep(NA, length(isocode)),
         stringsAsFactors = FALSE
       )
-    }    
-  
+    }
+
     # All cells with source data get 1
     band_stats[valid_cells] <- 1
 
@@ -549,23 +557,23 @@ gapfill_pattern <- function(filedata,
     }
     # First loop over countries and determine whether source only has national
     # or also subnational data.
-    l <- unit_raster_order[length(unit_raster_order)] # Assumes that "shortest"
-    # in unit_raster is countries.
-    country_layer_vals <- values(subset(unit_raster, l))
+    l <- tail(unit_raster_order, n = 1) # Assumes that "shortest" in unit_raster
+    # is countries.
+    country_layer_vals <- ul(terra::values(unit_raster[[l]]))
     # Determine border cells. These are all cells which contain more than one
     # country. Source data from border cells is not used because mismatches
     # between country assignment in source data and country assignment used here
     # are more likely in border cells.
     if (!is.null(unit_border_raster)) {
-      if (nlayers(unit_border_raster) > 1) {
-        country_border_vals <- values(subset(unit_border_raster, l))
+      if (terra::nlyr(unit_border_raster) > 1) {
+        country_border_vals <- ul(terra::values(unit_border_raster[[l]]))
       } else {
-        country_border_vals <- values(subset(unit_border_raster, 1))
+        country_border_vals <- ul(terra::values(unit_border_raster[[1]]))
       }
     } else {
       # If unit_border_raster was not provided use dummy where all cells contain
       # only one admin unit
-      country_border_vals <- rep(1, ncell(unit_raster))
+      country_border_vals <- rep(1, terra::ncell(unit_raster))
     }
     multi_country_cells <- which(country_border_vals > 1)
     for (country in na.omit(unique(country_layer_vals))) {
@@ -599,7 +607,7 @@ gapfill_pattern <- function(filedata,
       # Mask out potential border mismatch
       country_border <- intersect(country_cells, multi_country_cells)
       if (length(country_border) > 0 &&
-        length(country_border) < length(country_cells)
+          length(country_border) < length(country_cells)
       ) {
         # Mask out border cells unless they make up all cells in country.
         m <- length(intersect(country_valid, country_border))
@@ -612,28 +620,28 @@ gapfill_pattern <- function(filedata,
         country_valid <- setdiff(country_valid, country_border)
       }
       if (length(country_valid) >= assign_grid_threshold ||
-        length(country_valid) > length(country_cells) / 4) {
+            length(country_valid) > length(country_cells) / 4) {
         # If there are any non-missing cells in country check whether sourcedata
         # lists only national-level values.
-        if ((!is.null(sourcedata) && !is.null(source_country_vals) &&
-          all(band_source[country_valid] %in% source_country_vals)) ||
-          length(country_missing) == 0 || is_national
+        if (is_national || length(country_missing) == 0 ||
+            (!is.null(sourcedata) && !is.null(source_country_vals) &&
+               all(band_source[country_valid] %in% source_country_vals))
         ) {
           # Only search at country level because all valid cells are in
           # source_country_vals. Also limit search to country level if
           # is_national == TRUE or if there are no missing values in country.
           # Country average needed for country_avg_table.
-          search_layers <- unit_raster_order[length(unit_raster_order)]
+          search_layers <- tail(unit_raster_order, n = 1)
         } else {
           # Search all available admin layers because at least some non-missing
           # cells are listed as subnational and cells need gap-filling.
           search_layers <- unit_raster_order
-          if (verbose && nlayers(unit_raster) > 1)
+          if (verbose && terra::nlyr(unit_raster) > 1)
             cat("Country has subnational data. Gap-filling subnationally.\n")
         }
         # Loop over admin levels determined in previous step
         for (l in search_layers) {
-          unit_layer_vals <- values(subset(unit_raster, l))[country_cells]
+          unit_layer_vals <- terra::values(unit_raster[[l]])[country_cells]
           # Determine unique admin units in this layer
           unit_layer_units <- unique(na.omit(unit_layer_vals))
           if (!is.null(unit_raster_names)) {
@@ -643,7 +651,7 @@ gapfill_pattern <- function(filedata,
               colnames(unit_raster_names),
               ignore.case = TRUE
             )
-          } 
+          }
           has_missing <- 0
           was_filled <- 0
           if (length(country_missing) > 0) {
@@ -676,31 +684,30 @@ gapfill_pattern <- function(filedata,
             }
             if (length(unit_missing) > 0)
               has_missing <- has_missing + 1
-            if (length(unit_missing) > 0 ||
-              l == unit_raster_order[length(unit_raster_order)]
+            if (length(unit_missing) > 0 || l == tail(unit_raster_order, n = 1)
             ) {
               # Find cells in admin unit with non-missing values
               unit_valid <- intersect(
                 unit_cells,
                 country_valid
               )
-              if (l == unit_raster_order[length(unit_raster_order)] &&
-                !is.null(sourcedata) && !is.null(source_country_vals) &&
-                any(band_source[unit_valid] %in% source_country_vals)
+              if (l == tail(unit_raster_order, n = 1) &&
+                  !is.null(sourcedata) && !is.null(source_country_vals) &&
+                  any(band_source[unit_valid] %in% source_country_vals)
               ) {
                 # Some cells in country are marked as having national value.
-                # Use only those. May still be more than one unique value in case
-                # of inconsistencies between country masks.
+                # Use only those. May still be more than one unique value in
+                # case of inconsistencies between country masks.
                 unit_national <- which(
                   band_source[unit_valid] %in% source_country_vals
                 )
                 if (length(unit_national) > length(unit_valid) / 100 &&
-                  (length(unit_national) >= assign_grid_threshold ||
-                  length(unit_national) >= ceiling(length(unit_cells) / 4))
+                    (length(unit_national) >= assign_grid_threshold ||
+                       length(unit_national) >= ceiling(length(unit_cells) / 4))
                 ) {
-                  # At least 1% of non-missing cells in country must be marked as
-                  # national to derive national average from those. Otherwise use
-                  # all non-missing cells in country. Done to avoid known
+                  # At least 1% of non-missing cells in country must be marked
+                  # as national to derive national average from those. Otherwise
+                  # use all non-missing cells in country. Done to avoid known
                   # mis-assignment issue in GADM where admin unit borders do not
                   # match units used in Mueller et al. dataset.
                   if (verbose && length(unit_national) < length(unit_valid)) {
@@ -717,7 +724,7 @@ gapfill_pattern <- function(filedata,
                 rm(unit_national)
               }
               if (length(unit_valid) < assign_grid_threshold &&
-                length(unit_valid) < ceiling(length(unit_cells) / 4)) {
+                    length(unit_valid) < ceiling(length(unit_cells) / 4)) {
                 # Not enough non-missing cells in unit. Skip to next unit.
                 next
               }
@@ -733,7 +740,7 @@ gapfill_pattern <- function(filedata,
                       paste(
                         sQuote(unit_raster_names[r, code_col + 2]),
                         ifelse(
-                          l != unit_raster_order[length(unit_raster_order)],
+                          l != tail(unit_raster_order, n = 1),
                           paste0(
                             "(", unit_raster_names[country_r, "country"], ")"
                           ),
@@ -753,7 +760,7 @@ gapfill_pattern <- function(filedata,
                 band_gapfillsources[unit_missing] <- length(unit_valid)
                 # Success counter
                 was_filled <- was_filled + 1
-                if (l == unit_raster_order[length(unit_raster_order)]) {
+                if (l == tail(unit_raster_order, n = 1)) {
                   # Set country value
                   r_avg <- match(
                     ifelse(is.null(unit_raster_names), u, isocode),
@@ -764,8 +771,8 @@ gapfill_pattern <- function(filedata,
                   country_avg_table[r_avg, "nsource"] <- length(unit_valid)
                 }
               } else if (length(unit_valid) > 0 &&
-                modal(band_data[unit_valid], ties = "lowest") ==
-                median(band_data[unit_valid])
+                  modal_ties_lowest(band_data[unit_valid]) ==
+                    median(band_data[unit_valid])
               ) {
                 # If there are several values in source cells, but the most
                 # frequent one is equal to the median use that value for all
@@ -783,7 +790,7 @@ gapfill_pattern <- function(filedata,
                       paste(
                         sQuote(unit_raster_names[r, code_col + 2]),
                         ifelse(
-                          l != unit_raster_order[length(unit_raster_order)],
+                          l != tail(unit_raster_order, n = 1),
                           paste0(
                             "(", unit_raster_names[country_r, "country"], ")"
                           ),
@@ -810,7 +817,7 @@ gapfill_pattern <- function(filedata,
                 band_gapfillsources[unit_missing] <- length(unit_valid)
                 # Success counter
                 was_filled <- was_filled + 1
-                if (l == unit_raster_order[length(unit_raster_order)]) {
+                if (l == tail(unit_raster_order, n = 1)) {
                   # Set country value
                   r_avg <- match(
                     ifelse(is.null(unit_raster_names), u, isocode),
@@ -829,7 +836,7 @@ gapfill_pattern <- function(filedata,
                     "Median value ",
                     median(band_data[unit_valid]),
                     " does not correspond to most frequent value ",
-                    modal(band_data[unit_valid], ties = "lowest"),
+                    modal_ties_lowest(band_data[unit_valid]),
                     " in admin unit ",
                     ifelse(
                       is.null(unit_raster_names),
@@ -837,7 +844,7 @@ gapfill_pattern <- function(filedata,
                       paste(
                         sQuote(unit_raster_names[r, code_col + 2]),
                         ifelse(
-                          l != unit_raster_order[length(unit_raster_order)],
+                          l != tail(unit_raster_order, n = 1),
                           paste0(
                             "(", unit_raster_names[country_r, "country"], ")"
                           ),
@@ -864,7 +871,7 @@ gapfill_pattern <- function(filedata,
                 band_gapfillsources[unit_missing] <- length(unit_valid)
                 # Success counter
                 was_filled <- was_filled + 1
-                if (l == unit_raster_order[length(unit_raster_order)]) {
+                if (l == tail(unit_raster_order, n = 1)) {
                   # Set country value
                   r_avg <- match(
                     ifelse(is.null(unit_raster_names), u, isocode),
@@ -875,7 +882,8 @@ gapfill_pattern <- function(filedata,
                   country_avg_table[r_avg, "nsource"] <- length(unit_valid)
                 }
               }
-              # Check consistency between output_filedata and output_gapfillstats
+              # Check consistency between output_filedata and
+              # output_gapfillstats.
               m_data <- which(is.na(output_band_data))
               m_gap <- which(is.na(band_stats))
               if (!identical(m_data, m_gap)) {
@@ -887,7 +895,7 @@ gapfill_pattern <- function(filedata,
                     paste(
                       sQuote(unit_raster_names[r, code_col + 2]),
                       ifelse(
-                        l != unit_raster_order[length(unit_raster_order)],
+                        l != tail(unit_raster_order, n = 1),
                         paste0(
                           "(", unit_raster_names[country_r, "country"], "): "
                         ),
@@ -911,7 +919,7 @@ gapfill_pattern <- function(filedata,
           # gap-filling, therefore do not update valid_cells.
           missing_cells <- intersect(
             which(is.na(output_band_data)),
-            which(!is.na(values(subset(unit_raster, 1))))
+            which(!is.na(terra::values(unit_raster[[1]])))
           )
           country_missing <- intersect(missing_cells, country_cells)
           if (has_missing > 0 && verbose) {
@@ -950,23 +958,34 @@ gapfill_pattern <- function(filedata,
     }
     # End of country loop
     # Update output variables
-    output_filedata <- setValues(output_filedata, output_band_data, layer = band)
-    output_gapfillstats <- setValues(
-      output_gapfillstats, band_stats, layer = band
+    terra::set.values(
+      output_filedata,
+      cells = seq_along(output_band_data),
+      values = output_band_data,
+      layer = band
     )
-    output_gapfillsources <- setValues(
-      output_gapfillsources, band_gapfillsources, layer = band
+    terra::set.values(
+      output_gapfillstats,
+      cells = seq_along(band_stats),
+      values = band_stats,
+      layer = band
     )
-  
+    terra::set.values(
+      output_gapfillsources,
+      cells = seq_along(band_gapfillsources),
+      values = band_gapfillsources,
+      layer = band
+    )
+
     # Check multi-country regions to fill any remaining missing cells.
     # Find columns with region codes in country_grouping. Region averages are
     # used to fill countries with no non-missing values.
-    if (!is.null(country_grouping) && !is.null(country_grouping_col) &&
-      fill_regional_data && length(missing_cells) > 0
+    if (length(missing_cells) > 0 && fill_regional_data &&
+        !is.null(country_grouping) && !is.null(country_grouping_col)
     ) {
       if (verbose) {
         cat(
-          "Trying to fill any remaining missing values using average from", 
+          "Trying to fill any remaining missing values using average from",
           "country groups.\n"
         )
       }
@@ -1056,7 +1075,7 @@ gapfill_pattern <- function(filedata,
           # Mask out potential border mismatch
           country_border <- intersect(country_cells, multi_country_cells)
           if (length(country_border) > 0 &&
-            length(country_border) < length(country_cells)
+              length(country_border) < length(country_cells)
           ) {
             # Mask out border cells unless they make up all cells in country.
             m <- length(intersect(country_valid, country_border))
@@ -1097,15 +1116,18 @@ gapfill_pattern <- function(filedata,
             }
             # If country is not in country group data, try to find replacement
             # in fao_gadm_country_mapping from helper/fao_gadm_country_mapping.R
-            if (exists("fao_gadm_country_mapping") &&
-              isocode %in% unlist(fao_gadm_country_mapping)
+            if (exists("LandInG_setup") &&
+                !is.null(LandInG_setup$fertilizer$fao_gadm_country_mapping) &&
+                isocode %in% unlist(
+                  LandInG_setup$fertilizer$fao_gadm_country_mapping
+                )
             ) {
               # Find all countries in fao_gadm_country_mapping that contain
               # isocode and also contain country codes actually found in
               # country_grouping. May be more than one.
               country_match <- which(
                 sapply(
-                  fao_gadm_country_mapping,
+                  LandInG_setup$fertilizer$fao_gadm_country_mapping,
                   function(codes, search, all_valid) {
                     search %in% codes && any(all_valid %in% codes)
                   },
@@ -1113,16 +1135,22 @@ gapfill_pattern <- function(filedata,
                   all_valid = country_grouping[, country_grouping_col]
                 )
               )
-              # Sort found countries by number of included ISO codes, use shortest.
+              # Sort found countries by number of included ISO codes, use
+              # shortest.
               if (length(country_match) > 0) {
                 replacement_name <- names(
-                  sort(sapply(fao_gadm_country_mapping[country_match], length))
+                  sort(
+                    sapply(
+                      LandInG_setup$fertilizer$fao_gadm_country_mapping[country_match],
+                      length
+                    )
+                  )
                 )[1]
                 # Country in fao_gadm_country_mapping consists of several ISO
                 # codes. Replace with first ISO code that is included in
                 # country_grouping, assuming that main ISO code is listed first.
                 isocode <- intersect(
-                  fao_gadm_country_mapping[[replacement_name]],
+                  LandInG_setup$fertilizer$fao_gadm_country_mapping[[replacement_name]],
                   country_grouping[, country_grouping_col]
                 )[1]
                 if (verbose) {
@@ -1188,10 +1216,11 @@ gapfill_pattern <- function(filedata,
             dev_country <- grep(
               "x", country_grouping[group_r, dev_col], ignore.case = TRUE
             )
-            # Source attribute for output_gapfillstats depending on region level.
-            # By default: 5 for Intermediate Region, 6 for Sub-region, 7 for
-            # Region. This assumes column order in country_grouping is Region ->
-            # Sub-region -> Intermediate Region. Change if column order changes.
+            # Source attribute for output_gapfillstats depending on region
+            # level. By default: 5 for Intermediate Region, 6 for Sub-region,
+            # 7 for Region. This assumes column order in country_grouping is
+            # Region -> Sub-region -> Intermediate Region. Change if column
+            # order changes.
             gapfill_source <- unit_levels + length(reg_col) -
               seq_along(reg_col) + 2
             for (reg in seq_along(reg_col)) {
@@ -1215,13 +1244,13 @@ gapfill_pattern <- function(filedata,
                   )
                   if (length(tmp_iso) < assign_country_threshold) {
                     # Be less strict and allow all countries in group with any
-                    # development status. This assumes that development states are
-                    # "LDC", "LLDC" and "SIDS". Not be applicable anymore if
-                    # country_grouping also distinguishes developing and developed
-                    # countries.
+                    # development status. This assumes that development states
+                    # are "LDC", "LLDC" and "SIDS". Not applicable anymore if
+                    # country_grouping also distinguishes developing and
+                    # developed countries.
                     tmp_iso <- intersect(group_iso, unlist(dev_with_avg))
-                    # Add 0.25 to source attribute because we are using less strict
-                    # group assignment.
+                    # Add 0.25 to source attribute because we are using less
+                    # strict group assignment.
                     if (length(dev_country) < length(dev_col))
                       gapfill_source[reg] <- gapfill_source[reg] + 0.25
                   }
@@ -1229,7 +1258,8 @@ gapfill_pattern <- function(filedata,
                   rm(tmp_iso)
                 } else {
                   # If country has no development status, reduce group list to
-                  # include only countries which also have no development status.
+                  # include only countries which also have no development
+                  # status.
                   group_iso <- setdiff(group_iso, unlist(dev_with_avg))
                 }
                 region_has_values[[reg_col[reg]]] <- group_iso
@@ -1244,7 +1274,7 @@ gapfill_pattern <- function(filedata,
                 sapply(
                   region_has_values,
                   function(indata) {
-                    if(length(indata) >= assign_country_threshold) {
+                    if (length(indata) >= assign_country_threshold) {
                       length(indata)
                     } else NA
                   }
@@ -1298,57 +1328,63 @@ gapfill_pattern <- function(filedata,
                   sQuote(country_name), "\n"
                 )
               }
-              # Use median across countries in region group, regardless of country
-              # size.
+              # Use median across countries in region group, regardless of
+              # country size.
               r <- match(group_iso, country_avg_table$code)
               output_band_data[country_missing] <- median(
                 country_avg_table$apprate[r]
               )
               rm(r)
               band_stats[country_missing] <- gapfill_source[reg]
-              # Save number of source countries used for Admin unit value
+              # Save number of source countries used for Admin unit value.
               band_gapfillsources[country_missing] <- length(group_iso)
-              # Continue to next country
+              # Continue to next country.
               next
             }
             # Try global average if no suitable value found in regions.
             # All countries part of group.
             group_iso <- iso_with_avg
-            # Source attribute for output_gapfillstats depending on region level.
+            # Source attribute for output_gapfillstats depending on region
+            # level.
             # By default: 8 for Global. Global follows after original data (1),
-            # different admin units used (usually 2-4), region used (usually 5-7).
+            # different admin units used (usually 2-4), region used
+            # (usually 5-7).
             gapfill_source <- unit_levels + length(reg_col) + 2
-            # Check if country has development status
+            # Check if country has development status.
             if (isocode %in% country_grouping[, country_grouping_col]) {
               group_r <- match(isocode, country_grouping[, country_grouping_col])
-              # Check development status of country
+              # Check development status of country.
               dev_country <- grep(
                 "x", country_grouping[group_r, dev_col], ignore.case = TRUE
               )
-              # If country has development status, reduce group list to countries
-              # with same development status
+              # If country has development status, reduce group list to
+              # countries with same development status.
               if (length(dev_country) > 0) {
-                tmp_iso <- intersect(group_iso, unlist(dev_with_avg[dev_country]))
+                tmp_iso <- intersect(
+                  group_iso,
+                  unlist(dev_with_avg[dev_country])
+                )
                 if (length(tmp_iso) < assign_country_threshold) {
                   # Be less strict and allow all countries in group with any
                   # development status. This assumes that development states are
-                  # "LDC", "LLDC" and "SIDS". Not be applicable anymore if
+                  # "LDC", "LLDC" and "SIDS". Not applicable anymore if
                   # country_grouping also distinguishes developing and developed
                   # countries.
                   tmp_iso <- intersect(group_iso, unlist(dev_with_avg))
-                  # Add 0.25 to source attribute because we are using less strict
-                  # group assignment.
+                  # Add 0.25 to source attribute because we are using less
+                  # strict group assignment.
                   if (length(dev_country) < length(dev_col))
                     gapfill_source <- gapfill_source + 0.25
                 }
                 if (length(tmp_iso) >= assign_country_threshold) {
                   # Only reduce global country list to smaller list with same or
-                  # similar development status if any countries are left. Otherwise,
-                  # use all countries because there is no other search option left.
+                  # similar development status if any countries are left.
+                  # Otherwise, use all countries because there is no other
+                  # search option left.
                   group_iso <- tmp_iso
                 } else if (length(dev_country) < length(dev_col)) {
-                  # Add 0.5 to source attribute because we are not using development
-                  # status.
+                  # Add 0.5 to source attribute because we are not using
+                  # development status.
                   gapfill_source <- gapfill_source + 0.5
                 }
                 rm(tmp_iso)
@@ -1358,8 +1394,8 @@ gapfill_pattern <- function(filedata,
                 tmp_iso <- setdiff(group_iso, unlist(dev_with_avg))
                 if (length(tmp_iso) >= assign_country_threshold) {
                   # Only reduce global country list to smaller list with no
-                  # development status if any countries are left. Otherwise, use all
-                  # because there is no other search option left.
+                  # development status if any countries are left. Otherwise, use
+                  # all because there is no other search option left.
                   group_iso <- tmp_iso
                 } else {
                   # Add 0.75 to source attribute because we are not using
@@ -1415,15 +1451,15 @@ gapfill_pattern <- function(filedata,
                   sQuote(country_name), "\n"
                 )
               }
-              # Use median across countries, regardless of country size, but maybe
-              # accounting for development status.
+              # Use median across countries, regardless of country size, but
+              # maybe accounting for development status.
               output_band_data[country_missing] <- median(
                 country_avg_table$apprate[match(group_iso, country_avg_table$code)]
               )
               band_stats[country_missing] <- gapfill_source
-              # Save number of source countries used for Admin unit value
+              # Save number of source countries used for Admin unit value.
               band_gapfillsources[country_missing] <- length(group_iso)
-              # Continue to next country
+              # Continue to next country.
               next
             }
           } else {
@@ -1478,21 +1514,21 @@ gapfill_pattern <- function(filedata,
                 country_avg_table$apprate[match(group_iso, country_avg_table$code)]
               )
               band_stats[country_missing] <- gapfill_source
-              # Save number of source countries used for Admin unit value
+              # Save number of source countries used for Admin unit value.
               band_gapfillsources[country_missing] <- length(group_iso)
             }
           }
         }
-        # End second loop over countries
+        # End second loop over countries.
         rm(country_cells, country_missing, country_valid)
       }
-      # Update missing_cells
+      # Update missing_cells.
       missing_cells <- intersect(
         which(is.na(output_band_data)),
-        which(!is.na(values(subset(unit_raster, 1))))
+        which(!is.na(terra::values(unit_raster[[1]])))
       )
     }
-    
+
     if (length(missing_cells) > 0) {
       # Gap-filling was not successful.
       warning("Incomplete gap-filling.")
@@ -1500,24 +1536,35 @@ gapfill_pattern <- function(filedata,
         cat(length(missing_cells), "missing cells remaining\n")
     }
 
-    # Update output variables
-    output_filedata <- setValues(output_filedata, output_band_data, layer = band)
-    output_gapfillstats <- setValues(
-      output_gapfillstats, band_stats, layer = band
+    # Update output variables.
+    terra::set.values(
+      output_filedata,
+      cells = seq_along(output_band_data),
+      values = output_band_data,
+      layer = band
     )
-    output_gapfillsources <- setValues(
-      output_gapfillsources, band_gapfillsources, layer = band
+    terra::set.values(
+      output_gapfillstats,
+      cells = seq_along(band_stats),
+      values = band_stats,
+      layer = band
     )
-  } # End of band loop
-  # Find country band un unit_raster
-  l <- unit_raster_order[length(unit_raster_order)]
-  output_data <- brick(
+    terra::set.values(
+      output_gapfillsources,
+      cells = seq_along(band_gapfillsources),
+      values = band_gapfillsources,
+      layer = band
+    )
+  } # End of band loop.
+  # Find country band in unit_raster
+  l <- tail(unit_raster_order, n = 1)
+  output_data <- c(
     output_filedata,
     output_gapfillstats,
     output_gapfillsources,
-    subset(unit_raster, l)
+    unit_raster[[l]]
   )
   rm(output_filedata, output_gapfillstats, output_gapfillsources, missing_cells,
      valid_cells, band_data, band_gapfillsources, band_stats, output_band_data)
-  return(output_data)
+  output_data
 }

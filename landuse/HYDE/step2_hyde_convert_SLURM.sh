@@ -1,6 +1,5 @@
 #!/bin/bash
 #SBATCH --qos=short
-#SBATCH --partition=standard
 #SBATCH --account=lpjml
 #SBATCH --job-name=HYDE_conversion
 #SBATCH --output=ascii2ncdf.%j.out
@@ -15,6 +14,9 @@
 ## Contact: https://github.com/PIK-LPJmL/LandInG/                             ##
 ################################################################################
 
-module load cdo/1.7.1
+if [ -d /p/system/lenovo/ctt ]; then
+  # Load modules for PIK 2024 high-performance computer
+  module load cdo/2.4.4
+fi
 
 ./step2_hyde_convert.sh

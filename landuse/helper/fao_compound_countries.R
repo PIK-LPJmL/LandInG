@@ -12,11 +12,15 @@
 ## exist and split into smaller countries at some point in time. Make sure to ##
 ## keep this in sync with FAOSTAT country definitions list.                   ##
 ################################################################################
-if (!exists("fix_cyprus")) {
-  # Should normally be set in landuse_setup.R
-  fix_cyprus <- FALSE
+# fix_cyprus setting should normally be set in landuse_setup.R
+if (!exists("LandInG_setup")) {
+  LandInG_setup <- new.env()
+  LandInG_setup$landuse$fix_cyprus <- FALSE
+} else if (is.null(LandInG_setup$landuse$fix_cyprus)) {
+  LandInG_setup$landuse$fix_cyprus <- FALSE
 }
-compound_countries <- list(
+
+LandInG_setup$landuse$compound_countries <- list(
   "Belgium-Luxembourg" = c("Belgium", "Luxembourg"),
   "Czechoslovakia" = c("Czechia", "Slovakia"),
   "Ethiopia PDR" = c("Ethiopia", "Eritrea"),
@@ -67,6 +71,7 @@ compound_countries <- list(
 # Fix for Cyprus
 # If future versions of FAOSTAT distinguish Northern and Southern Cyprus, update
 # names in mapping file if necessary.
-if (fix_cyprus) {
-  compound_countries[["Cyprus"]] <- c("Cyprus_Northern", "Cyprus_Southern")
+if (LandInG_setup$landuse$fix_cyprus) {
+  LandInG_setup$landuse$compound_countries[["Cyprus"]] <-
+    c("Cyprus_Northern", "Cyprus_Southern")
 }

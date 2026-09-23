@@ -18,11 +18,14 @@
 ## list most important one first.                                             ##
 ## First implementation corresponds to file also included in landuse directory##
 ################################################################################
-if (!exists("fix_cyprus")) {
-  # Should normally be set in fertilizer_setup.R
-  fix_cyprus <- FALSE
+# fix_cyprus setting should normally be set in fertilizer_setup.R
+if (!exists("LandInG_setup")) {
+  LandInG_setup <- new.env()
+  LandInG_setup$fertilizer$fix_cyprus <- FALSE
+} else if (is.null(LandInG_setup$fertilizer$fix_cyprus)) {
+  LandInG_setup$fertilizer$fix_cyprus <- FALSE
 }
-fao_gadm_country_mapping <- list(
+LandInG_setup$fertilizer$fao_gadm_country_mapping <- list(
   "Afghanistan" = "AFG",
   "Albania" = "ALB",
   "Algeria" = "DZA",
@@ -342,10 +345,11 @@ fao_gadm_country_mapping <- list(
 ## update mapping.                                                            ##
 ## Since HYDE currently uses FAOSTAT cropland for "Cyprus" for all of Cyprus  ##
 ## even after 1974, option to not fix FAOSTAT.                                ##
-if (fix_cyprus) {
-  fao_gadm_country_mapping[["Cyprus_Northern"]] <- "XNC"
+if (LandInG_setup$fertilizer$fix_cyprus) {
+  LandInG_setup$fertilizer$fao_gadm_country_mapping[["Cyprus_Northern"]] <- "XNC"
   # not in FAOSTAT
-  fao_gadm_country_mapping[["Cyprus_Southern"]] <- c("CYP", "XAD")
+  LandInG_setup$fertilizer$fao_gadm_country_mapping[["Cyprus_Southern"]] <-
+    c("CYP", "XAD")
   # Cyprus data in FAOSTAT seems to refer only to Southern Cyprus starting in
   # ca. 1975
   # XAD = Akrotiri and Dhekelia, two British military bases on Cyprus

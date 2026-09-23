@@ -8,18 +8,22 @@
 ################################################################################
 
 ################################################################################
-## Utility functions to use modal() within aggregate() with different "ties"  ##
-## parameters. By default, aggregate() does not pass "ties" to modal().       ##
+## Utility functions to calculate mode within aggregate() with different      ##
+## "ties" parameters. This allows for easier replacement of the underlying    ##
+## function used to calculate the mode and removes the need to pass the "ties"##
+## parameter separately.                                                      ##
 ################################################################################
-modal_ties_lowest <- function(x, ..., na.rm = TRUE, freq = FALSE) {
-  return(raster::modal(x, ..., ties = "lowest", na.rm = na.rm, freq = freq))
+modal_ties_lowest <- function(x, ..., na.rm = TRUE) {
+  collapse::fmode(x, ..., ties = "min", na.rm = na.rm, nthreads = 1)
 }
-modal_ties_highest <- function(x, ..., na.rm = TRUE, freq = FALSE) {
-  return(raster::modal(x, ..., ties = "highest", na.rm = na.rm, freq = freq))
+modal_ties_highest <- function(x, ..., na.rm = TRUE) {
+  collapse::fmode(x, ..., ties = "max", na.rm = na.rm, nthreads = 1)
 }
-modal_ties_first <- function(x, ..., na.rm = TRUE, freq = FALSE) {
-  return(raster::modal(x, ..., ties = "first", na.rm = na.rm, freq = freq))
+modal_ties_first <- function(x, ..., na.rm = TRUE) {
+  collapse::fmode(x, ..., ties = "first", na.rm = na.rm, nthreads = 1)
 }
-modal_ties_random <- function(x, ..., na.rm = TRUE, freq = FALSE) {
-  return(raster::modal(x, ..., ties = "random", na.rm = na.rm, freq = freq))
+modal_ties_random <- function(x, ..., na.rm = TRUE) {
+  # fmode does not provide ties = "random" so shuffle x instead.
+  x <- sample(rep(x, 2), size = length(x) * 2)
+  collapse::fmode(x, ..., ties = "first", na.rm = na.rm, nthreads = 1)
 }

@@ -46,8 +46,10 @@ missval_integer <- -5
 ## Nutrient for which input file is requested. Run this script several times  ##
 ## to request files for multiple nutrients.                                   ##
 cft_nut <- "N"
-## Period for input file created (default: same as output_period)             ##
-cft_output_period <- c(startyear, endyear)
+## Period (start year and end year) for input file created. Default: same as  ##
+## output_period defined in fertilizer_setup.R, but can also be longer, e.g.  ##
+## if weighting datasets (landuse data) cover a longer period.                ##
+cft_output_period <- stop("Set 'cft_output_period' in cft_input_timeseries.R")
 ## Unit used in generated file. By default, LPJmL uses "g/m2"                 ##
 cft_output_unit <- "g/m2"
 ## Optional version string added to file names of created files to            ##
@@ -136,7 +138,7 @@ manure_weighting_area_file <- file.path(
   "..", "landuse", "HYDE", "general_files",
   "garea_cr.asc"
 )
-## Area unit in pasture_weighting_area_file.                                  ##
+## Area unit in manure_weighting_area_file.                                   ##
 manure_weighting_area_file_unit <- "km2"
 ##                                                                            ##
 ## Optional weighting file to use for spatial aggregation on pastures. HYDE   ##
@@ -229,48 +231,37 @@ ha_weighting_bands <- setdiff(crop_bands, grep("fallow", cft_bands))
 
 ################################################################################
 ## Load grid file and determine requested output resolution and spatial extent##
-cft_gridheader <- read_header(cft_gridname)
-cft_gridfile <- file(cft_gridname, "rb")
-seek(cft_gridfile, get_headersize(cft_gridheader))
-cft_griddata <- matrix(
-  readBin(
-    cft_gridfile,
-    what = get_datatype(cft_gridheader)$type,
-    size = get_datatype(cft_gridheader)$size,
-    n = cft_gridheader$header["nbands"] * cft_gridheader$header["ncell"],
-    endian = cft_gridheader$endian
-  ) * cft_gridheader$header["scalar"],
-  ncol = cft_gridheader$header["nbands"],
-  byrow = cft_gridheader$header["order"] != 4
-)
-close(cft_gridfile)
+# lpjmlkit package provides functionality to read in a file in LPJmL format
+# including metadata about the file.
+cft_griddata <- lpjmlkit::read_grid(cft_gridname)
 # Create raster object corresponding to grid data
-cft_extent <- extent(
-  min(cft_griddata[, 1] - cft_gridheader$header["cellsize_lon"] / 2),
-  max(cft_griddata[, 1] + cft_gridheader$header["cellsize_lon"] / 2),
-  min(cft_griddata[, 2] - cft_gridheader$header["cellsize_lat"] / 2),
-  max(cft_griddata[, 2] + cft_gridheader$header["cellsize_lat"] / 2)
+cft_extent <- terra::ext(
+  min(cft_griddata$data[, "lon"] - cft_griddata$meta$cellsize_lon / 2),
+  max(cft_griddata$data[, "lon"] + cft_griddata$meta$cellsize_lon / 2),
+  min(cft_griddata$data[, "lat"] - cft_griddata$meta$cellsize_lat / 2),
+  max(cft_griddata$data[, "lat"] + cft_griddata$meta$cellsize_lat / 2)
 )
-cft_raster <- raster(
-  cft_extent,
-  resolution = cft_gridheader$header[c("cellsize_lon", "cellsize_lat")]
+cft_raster <- terra::rast(
+  extent = cft_extent,
+  resolution = c(cft_griddata$meta$cellsize_lon, cft_griddata$meta$cellsize_lat)
 )
 # Determine indices of grid cells in raster for later data extraction
-cft_raster_gridindex <- cellFromXY(cft_raster, cft_griddata)
+cft_raster_gridindex <- terra::cellFromXY(cft_raster, cft_griddata$data)
 cat(
   paste0(
     "LPJmL grid file: ", cft_gridname,
-    " (ncell=", cft_gridheader$header["ncell"],
-    ", cellsize_lon=", round(cft_gridheader$header["cellsize_lon"], 8),
-    ", cellsize_lat=", round(cft_gridheader$header["cellsize_lat"], 8),
+    " (ncell=", cft_griddata$meta$ncell,
+    ", cellsize_lon=", round(cft_griddata$meta$cellsize_lon, 8),
+    ", cellsize_lat=", round(cft_griddata$meta$cellsize_lat, 8),
     ")\n"
   )
 )
 # Determine resolution string for output file
-tmp_res <- ifelse(res(cft_raster) < 1 / 60, 3600, 60) * res(cft_raster)
+tmp_res <- ifelse(terra::res(cft_raster) < 1 / 60, 3600, 60) *
+  terra::res(cft_raster)
 cft_res_string <- paste(
   unique(round(tmp_res)),
-  unique(ifelse(res(cft_raster) < 1 / 60, "sec", "min")),
+  unique(ifelse(terra::res(cft_raster) < 1 / 60, "sec", "min")),
   sep = "",
   collapse = "_by_"
 )
@@ -281,13 +272,18 @@ rm(tmp_res)
 ################################################################################
 ## Determine if source datasets are compatible with output resolution.        ##
 # Load crop list
-if (file.exists(mapping_file)) {
-  cat("Crop type mapping loaded from", sQuote(mapping_file), "\n")
-  crop_type_mapping <- read.csv(mapping_file, stringsAsFactors = FALSE)
+if (file.exists(LandInG_setup$fertilizer$mapping_file)) {
+  cat(
+    "Crop type mapping loaded from",
+    sQuote(LandInG_setup$fertilizer$mapping_file), "\n"
+  )
+  crop_type_mapping <- read.csv(
+    LandInG_setup$fertilizer$mapping_file, stringsAsFactors = FALSE
+  )
 } else {
   stop(
     paste(
-      "Mapping file", mapping_file, "does not exist.",
+      "Mapping file", LandInG_setup$fertilizer$mapping_file, "does not exist.",
       "\nPlease check fertilizer_setup.R"
     )
   )
@@ -298,9 +294,9 @@ for (table in c("crop_type_mapping")) {
     table_data <- get(table)
     for (col in colnames(table_data)) {
       if (typeof(table_data[, col]) == "character") {
-        if (!all(stri_enc_isascii(table_data[, col]), na.rm = TRUE)) {
+        if (!all(stringi::stri_enc_isascii(table_data[, col]), na.rm = TRUE)) {
           # String has non-ASCII characters
-          if (!all(stri_enc_isutf8(table_data[, col]), na.rm = TRUE)) {
+          if (!all(stringi::stri_enc_isutf8(table_data[, col]), na.rm = TRUE)) {
             # String has non-UTF8 characters -> assume windows-1252 encoding and
             # convert to UTF-8
             message(
@@ -308,7 +304,7 @@ for (table in c("crop_type_mapping")) {
               " from windows-1252 to UTF-8 encoding in ",
               table
             )
-            table_data[, col] <- stri_encode(
+            table_data[, col] <- stringi::stri_encode(
               table_data[, col],
               "windows-1252",
               "UTF-8"
@@ -321,8 +317,10 @@ for (table in c("crop_type_mapping")) {
             " from UTF-8 to ASCII encoding in ",
             table
           )
-          table_data[, col] <- stri_encode(table_data[, col], "UTF-8", "UTF-8")
-          table_data[, col] <- stri_trans_general(
+          table_data[, col] <- stringi::stri_encode(
+            table_data[, col], "UTF-8", "UTF-8"
+          )
+          table_data[, col] <- stringi::stri_trans_general(
             table_data[, col],
             "latin-ascii"
           )
@@ -336,21 +334,37 @@ for (table in c("crop_type_mapping")) {
 # Crops for which fertilizer data are available
 fert_bands <- which(
   # Fertilizer pattern name
-  nchar(crop_type_mapping[, fertilizer_pattern_map_col]) > 0 &
-  # Fertilizer assigned to LPJmL CFT (no need to check crops which will not be
-  # used anyway)
-  nchar(crop_type_mapping[, cft_map_col]) > 0
+  nchar(
+    crop_type_mapping[, LandInG_setup$fertilizer$fertilizer_pattern_map_col]
+  ) > 0 &
+    # Fertilizer assigned to LPJmL CFT (no need to check crops which will not be
+    # used anyway)
+    nchar(crop_type_mapping[, LandInG_setup$fertilizer$cft_map_col]) > 0
 )
 # Check that all CFTs have at least one entry with fertilizer data
-cft_no_source <- (!cft_bands %in% crop_type_mapping[fert_bands, cft_map_col])
+cft_no_source <- (!cft_bands %in%
+    crop_type_mapping[fert_bands, LandInG_setup$fertilizer$cft_map_col]
+)
 if (
-  !any(grepl("rainfed|irrigated", crop_type_mapping[fert_bands, cft_map_col]))
+  !any(
+    grepl(
+      "rainfed|irrigated",
+      crop_type_mapping[fert_bands, LandInG_setup$fertilizer$cft_map_col]
+    )
+  )
 ) {
   # Assume that crop_type_mapping does not distinguish between rainfed and
   # irrigated crops and uses the same mapping for both.
   cft_no_source <- cft_no_source & !cft_bands %in%
-    paste("rainfed", crop_type_mapping[fert_bands, cft_map_col]) &
-    !cft_bands %in% paste("irrigated", crop_type_mapping[fert_bands, cft_map_col])
+    paste(
+      "rainfed",
+      crop_type_mapping[fert_bands, LandInG_setup$fertilizer$cft_map_col]
+    ) &
+    !cft_bands %in%
+      paste(
+        "irrigated",
+        crop_type_mapping[fert_bands, LandInG_setup$fertilizer$cft_map_col]
+      )
   # Is mapping irrigation-specific?
   mapping_irr_spec <- FALSE
 } else {
@@ -381,17 +395,29 @@ if (process_manure && !any(cft_bands_get_manure)) {
 fert_dir <- character()
 fert_res <- list()
 fert_names <- list()
-fert_crops <- unique(crop_type_mapping[fert_bands, fertilizer_pattern_map_col])
+fert_crops <- unique(
+  crop_type_mapping[fert_bands, LandInG_setup$fertilizer$fertilizer_pattern_map_col]
+)
 if (process_fertilizer) {
   for (search_dir in list.dirs("tmp", recursive = FALSE)) {
     search_pattern <- paste0(
       "^(", paste(fert_crops, collapse = "|"), ")",
       #"^[- _[:alnum:]]+",
       cft_nut,
-      "_timeseries_pattern_", fertilizer_pattern_admin, "_",
-      ifelse(fertilizer_pattern_is_national, "national", "subnational"),
-      "_trend_", fertilizer_trend_admin, "_",
-      ifelse(fertilizer_trend_is_national, "national", "subnational"),
+      "_timeseries_pattern_",
+      LandInG_setup$fertilizer$fertilizer_pattern_admin,
+      "_",
+      ifelse(
+        LandInG_setup$fertilizer$fertilizer_pattern_is_national,
+        "national",
+        "subnational"
+      ),
+      "_trend_", LandInG_setup$fertilizer$fertilizer_trend_admin, "_",
+      ifelse(
+        LandInG_setup$fertilizer$fertilizer_trend_is_national,
+        "national",
+        "subnational"
+      ),
       "_\\d{4}-\\d{4}.nc$"
     )
     fert_names[[search_dir]] <- list.files(
@@ -414,7 +440,9 @@ if (process_fertilizer) {
           "Directory ", sQuote(search_dir),
           " contains time series for ", length(fert_names[[search_dir]]),
           " crops, but the following crops defined in ",
-          "crop_type_mapping[, ", fertilizer_pattern_map_col, "] are missing: ",
+          "crop_type_mapping[, ",
+          LandInG_setup$fertilizer$fertilizer_pattern_map_col,
+          "] are missing: ",
           toString(sQuote(setdiff(fert_crops, found_crops))),
           ". Please confirm that combine_fertilizer_pattern_trend_*.R",
           " successfully creates time series for all crops.",
@@ -431,8 +459,8 @@ if (process_fertilizer) {
       }
       # search_dir has data that can potentially be used
       # Check resolution
-      fert_raster <- raster(fert_names[[search_dir]][1], band = 1)
-      fert2cft <- res(cft_raster) / res(fert_raster)
+      fert_raster <- terra::rast(fert_names[[search_dir]][1], lyrs = 1)
+      fert2cft <- terra::res(cft_raster) / terra::res(fert_raster)
       if (any(fert2cft < 0.999)) {
         # Data resolution is too coarse for CFT output resolution.
         message(
@@ -444,7 +472,7 @@ if (process_fertilizer) {
         next
       }
       # Crop to output spatial extent if source data has larger extent.
-      fert_raster <- crop(fert_raster, cft_raster)
+      fert_raster <- terra::crop(fert_raster, cft_raster)
       # Check alignment and whether resolution can be aggregated.
       fert_res_check <- try(
         match_admin_to_data(cft_raster, fert_raster, fun = sum, verbose = FALSE)
@@ -459,7 +487,7 @@ if (process_fertilizer) {
         next
       }
       # Check if fert_raster covers full extent of cft_raster
-      if (ncell(fert_res_check) != ncell(cft_raster)) {
+      if (terra::ncell(fert_res_check) != terra::ncell(cft_raster)) {
         message(
           "Fertilizer time series data in ", sQuote(search_dir),
           " does not cover full extent of desired output grid"
@@ -469,27 +497,27 @@ if (process_fertilizer) {
         next
       }
       # Check unit
-      tmp_nc <- nc_open(fert_names[[search_dir]][1])
-      tmp_unit <- ncatt_get(
+      tmp_nc <- ncdf4::nc_open(fert_names[[search_dir]][1])
+      tmp_unit <- ncdf4::ncatt_get(
         tmp_nc,
         paste0(found_crops[1], cft_nut, "_timeseries"),
         "units"
       )
-      nc_close(tmp_nc)
+      ncdf4::nc_close(tmp_nc)
       if (!tmp_unit$hasatt) {
         warning(
           "Warning: No unit attribute set in ",
           sQuote(fert_names[[search_dir]][1]),
           ". Make sure unit ",
-          sQuote(fertilizer_pattern_unit),
+          sQuote(LandInG_setup$fertilizer$fertilizer_pattern_unit),
           " set in fertilizer_setup.R is correct.",
           call. = FALSE,
           immediate. = TRUE
         )
         # Set to fertilizer_pattern_unit
-        tmp_unit$value <- fertilizer_pattern_unit
+        tmp_unit$value <- LandInG_setup$fertilizer$fertilizer_pattern_unit
       }
-      if (!ud.are.convertible(tmp_unit$value, cft_output_unit)) {
+      if (!units::ud_are_convertible(tmp_unit$value, cft_output_unit)) {
         message(
           "Info: Cannot use fertilizer time series data in ",
           sQuote(search_dir), " because unit ", sQuote(tmp_unit$value),
@@ -506,7 +534,7 @@ if (process_fertilizer) {
         "\n"
       )
       fert_dir <- c(fert_dir, search_dir)
-      fert_res[[search_dir]] <- res(fert_raster)
+      fert_res[[search_dir]] <- terra::res(fert_raster)
       rm(fert_raster, fert_res_check, tmp_nc, tmp_unit)
     } else {
       fert_names[[search_dir]] <- NULL
@@ -524,37 +552,47 @@ manure_res <- list()
 manure_names <- list()
 if (process_manure && any(cft_bands_get_manure)) {
   # Is original source data given as rate per unit area or as total amount?
-  tmp_is_rate <- !is.null(manure_ref_area) &&
-    (length(manure_ref_area) == 1 && is.null(names(manure_ref_area)) ||
-    cft_nut %in% names(manure_ref_area))
+  tmp_is_rate <- !is.null(LandInG_setup$fertilizer$manure_ref_area) &&
+    (length(LandInG_setup$fertilizer$manure_ref_area) == 1 &&
+        is.null(names(LandInG_setup$fertilizer$manure_ref_area)) ||
+        cft_nut %in% names(LandInG_setup$fertilizer$manure_ref_area)
+    )
   # Area reference in original source data. "grid" or "cropland" if
   # manure_is_rate.
   tmp_ref_area <- ifelse(
-    is.null(manure_ref_area),
+    is.null(LandInG_setup$fertilizer$manure_ref_area),
     NULL,
     ifelse(
-      is.null(names(manure_ref_area)) && length(manure_ref_area) == 1,
-      manure_ref_area,
-      ifelse(cft_nut %in% names(manure_ref_area), manure_ref_area[nut], NULL)
+      is.null(names(LandInG_setup$fertilizer$manure_ref_area)) &&
+        length(LandInG_setup$fertilizer$manure_ref_area) == 1,
+      LandInG_setup$fertilizer$manure_ref_area,
+      ifelse(
+        cft_nut %in% names(LandInG_setup$fertilizer$manure_ref_area),
+        LandInG_setup$fertilizer$manure_ref_area[cft_nut],
+        NULL
+      )
     )
   )
   # Optional maximum application rate.
   manure_apply_threshold <- ifelse(
-    is.null(manure_threshold),
+    is.null(LandInG_setup$fertilizer$manure_threshold),
     Inf,
     ifelse(
-      is.null(names(manure_threshold)) && length(manure_threshold) == 1,
-      manure_threshold,
+      is.null(names(LandInG_setup$fertilizer$manure_threshold)) &&
+        length(LandInG_setup$fertilizer$manure_threshold) == 1,
+      LandInG_setup$fertilizer$manure_threshold,
       ifelse(
-        cft_nut %in% names(manure_threshold),
-        manure_threshold[cft_nut],
+        cft_nut %in% names(LandInG_setup$fertilizer$manure_threshold),
+        LandInG_setup$fertilizer$manure_threshold[cft_nut],
         Inf
       )
     )
   )
   # Unit of optional maximum application rate.
   manure_apply_threshold_unit <- ifelse(
-    length(manure_rate_unit) > 1, manure_rate_unit[nut], manure_rate_unit
+    length(LandInG_setup$fertilizer$manure_rate_unit) > 1,
+    LandInG_setup$fertilizer$manure_rate_unit[cft_nut],
+    LandInG_setup$fertilizer$manure_rate_unit
   )
   # Derive mass component and area component in optional maximum application
   # rate.
@@ -582,11 +620,12 @@ if (process_manure && any(cft_bands_get_manure)) {
   )
   # At which resolution to apply maximum application rate
   manure_apply_threshold_res <- ifelse(
-    is.null(names(manure_threshold_res)) && length(manure_threshold_res) == 1,
-    manure_threshold_res,
+    is.null(names(LandInG_setup$fertilizer$manure_threshold_res)) &&
+      length(LandInG_setup$fertilizer$manure_threshold_res) == 1,
+    LandInG_setup$fertilizer$manure_threshold_res,
     ifelse(
-      cft_nut %in% names(manure_threshold_res),
-      manure_threshold_res[cft_nut],
+      cft_nut %in% names(LandInG_setup$fertilizer$manure_threshold_res),
+      LandInG_setup$fertilizer$manure_threshold_res[cft_nut],
       stop(
         paste0("Missing setting manure_threshold_res[", dQuote(cft_nut), "]")
       )
@@ -616,27 +655,27 @@ if (process_manure && any(cft_bands_get_manure)) {
     if (length(manure_names[[search_dir]]) > 0) {
       tmp_fileyears <- integer(0)
       for (filename in manure_names[[search_dir]]) {
-        tmp_nc <- nc_open(filename)
+        tmp_nc <- ncdf4::nc_open(filename)
         tmp_fileyears <- c(tmp_fileyears, nc_file_years(tmp_nc))
-        tmp_unit <- ncatt_get(
+        tmp_unit <- ncdf4::ncatt_get(
           tmp_nc,
           paste0("manure_", cft_nut, "_rate"),
           "units"
         )
-        nc_close(tmp_nc)
+        ncdf4::nc_close(tmp_nc)
         if (!tmp_unit$hasatt) {
           warning(
             "No unit attribute set in ",
             sQuote(filename),
             ". Make sure unit ",
-            sQuote(manure_rate_unit),
+            sQuote(LandInG_setup$fertilizer$manure_rate_unit),
             " set in fertilizer_setup.R is correct.",
             call. = FALSE,
             immediate. = TRUE
           )
           tmp_unit$value <- manure_apply_threshold_unit
         }
-        if (!ud.are.convertible(tmp_unit$value, cft_output_unit)) {
+        if (!units::ud_are_convertible(tmp_unit$value, cft_output_unit)) {
           message(
             "Error: Cannot use manure time series data in ", sQuote(search_dir),
             " because unit ", sQuote(tmp_unit$value),
@@ -648,7 +687,9 @@ if (process_manure && any(cft_bands_get_manure)) {
         }
         if (is.finite(manure_apply_threshold) &&
           manure_apply_threshold_res == "target" &&
-          !ud.are.convertible(tmp_unit$value, manure_apply_threshold_unit)
+          !units::ud_are_convertible(
+            tmp_unit$value, manure_apply_threshold_unit
+          )
         ) {
           # Cannot apply manure_threshold because units are incompatible.
           message(
@@ -666,7 +707,7 @@ if (process_manure && any(cft_bands_get_manure)) {
       }
       in_period <- which(
         tmp_fileyears >= min(cft_output_period) &
-        tmp_fileyears <= max(cft_output_period)
+          tmp_fileyears <= max(cft_output_period)
       )
       if (any(table(tmp_fileyears[in_period]) > 1)) {
         # Files overlap, cannot be used
@@ -679,12 +720,12 @@ if (process_manure && any(cft_bands_get_manure)) {
         next
       }
       # Check resolution
-      manure_raster <- raster(
+      manure_raster <- terra::rast(
         manure_names[[search_dir]][1],
-        band = 1,
-        varname = paste0("manure_", cft_nut, "_rate")
+        lyrs = 1,
+        subds = paste0("manure_", cft_nut, "_rate")
       )
-      manure2cft <- res(cft_raster) / res(manure_raster)
+      manure2cft <- terra::res(cft_raster) / terra::res(manure_raster)
       if (any(manure2cft < 0.999)) {
         # Data resolution is too coarse for CFT output resolution.
         message(
@@ -696,7 +737,7 @@ if (process_manure && any(cft_bands_get_manure)) {
         next
       }
       # Crop to output spatial extent if source data has larger extent.
-      manure_raster <- crop(manure_raster, cft_raster)
+      manure_raster <- terra::crop(manure_raster, cft_raster)
       # Check alignment and whether resolution can be aggregated.
       manure_res_check <- try(
         match_admin_to_data(
@@ -716,7 +757,7 @@ if (process_manure && any(cft_bands_get_manure)) {
         next
       }
       # Check if manure_raster covers full extent of cft_raster
-      if (ncell(manure_res_check) != ncell(cft_raster)) {
+      if (terra::ncell(manure_res_check) != terra::ncell(cft_raster)) {
         message(
           "Manure time series data in ", sQuote(search_dir),
           " does not cover full extent of desired output grid"
@@ -724,12 +765,12 @@ if (process_manure && any(cft_bands_get_manure)) {
         manure_names[[search_dir]] <- NULL
         rm(manure_raster, manure_res_check)
         next
-      }        
+      }
       cat(
         "Compatible manure time series data found in", sQuote(search_dir), "\n"
       )
       manure_dir <- c(manure_dir, search_dir)
-      manure_res[[search_dir]] <- res(manure_raster)
+      manure_res[[search_dir]] <- terra::res(manure_raster)
       rm(manure_raster, manure_res_check)
       if (length(tmp_fileyears) != max(tmp_fileyears) - min(tmp_fileyears) + 1) {
         warning(
@@ -781,11 +822,10 @@ if (process_fertilizer) {
     )
   }
   # Check resolution
-  ha_weighting_raster <- raster(
+  ha_weighting_raster <- terra::rast(
     ha_weighting_names[1],
-    band = 1,
-    level = 1,
-    varname = ha_weighting_varname[1]
+    lyrs = 1,
+    subds = ha_weighting_varname[1]
   )
   # Check crop names in files.
   if (!is.null(ha_weighting_crop_names)) {
@@ -794,16 +834,18 @@ if (process_fertilizer) {
   if (!is.null(ha_weighting_crop_varname)) {
     # NetCDF files have variable containing crop names. Read them.
     for (filename in ha_weighting_names) {
-      tmp_nc <- nc_open(filename)
+      tmp_nc <- ncdf4::nc_open(filename)
       if (is.null(ha_weighting_crop_names)) {
         # Read crop names from file into variable ha_weighting_crop_names
-        ha_weighting_crop_names <- ncvar_get(tmp_nc, ha_weighting_crop_varname)
+        ha_weighting_crop_names <- ncdf4::ncvar_get(
+          tmp_nc, ha_weighting_crop_varname
+        )
         ha_weighting_crop_names_src <- filename
       } else {
         # Confirm that crop names in file match ha_weighting_crop_names
         if (!identical(
           ha_weighting_crop_names,
-          ncvar_get(tmp_nc, ha_weighting_crop_varname)
+          ncdf4::ncvar_get(tmp_nc, ha_weighting_crop_varname)
         )) {
           stop(
             paste(
@@ -822,9 +864,9 @@ if (process_fertilizer) {
       # Check that harvested area variables have correct number of crop bands.
       for (tmp_varname in ha_weighting_varname) {
         if (tmp_nc[["var"]][[tmp_varname]][["varsize"]][3] !=
-          length(ha_weighting_crop_names)
+            length(ha_weighting_crop_names)
         ) {
-          nc_close(tmp_nc)
+          ncdf4::nc_close(tmp_nc)
           stop(
             paste(
               "Variable dimensions for", sQuote(tmp_varname),
@@ -833,7 +875,7 @@ if (process_fertilizer) {
             )
           )
         }
-        tmp_unit <- ncatt_get(tmp_nc, tmp_varname, "units")
+        tmp_unit <- ncdf4::ncatt_get(tmp_nc, tmp_varname, "units")
         if (!tmp_unit$hasatt) {
           warning(
             "No unit attribute set for ", sQuote(tmp_varname),
@@ -843,7 +885,7 @@ if (process_fertilizer) {
             call. = FALSE,
             immediate. = TRUE
           )
-        } else if (!ud.are.convertible(tmp_unit$value, "m2")) {
+        } else if (!units::ud_are_convertible(tmp_unit$value, "m2")) {
           warning(
             "Unit attribute ", sQuote(tmp_unit$value),
             " set for ", sQuote(tmp_varname), " in file ", sQuote(filename),
@@ -854,18 +896,18 @@ if (process_fertilizer) {
           )
         }
       }
-      nc_close(tmp_nc)
+      ncdf4::nc_close(tmp_nc)
     }
   } else {
     # If crop names are not determined from files, at least check that harvested
     # area variables have correct number of crop bands.
     for (filename in ha_weighting_names) {
-      tmp_nc <- nc_open(filename)
+      tmp_nc <- ncdf4::nc_open(filename)
       for (tmp_varname in ha_weighting_varname) {
         if (tmp_nc[["var"]][[tmp_varname]][["varsize"]][3] !=
-          length(ha_weighting_crop_names)
+            length(ha_weighting_crop_names)
         ) {
-          nc_close(tmp_nc)
+          ncdf4::nc_close(tmp_nc)
           stop(
             paste(
               "Variable dimensions for", sQuote(tmp_varname),
@@ -874,7 +916,7 @@ if (process_fertilizer) {
             )
           )
         }
-        tmp_unit <- ncatt_get(tmp_nc, tmp_varname, "units")
+        tmp_unit <- ncdf4::ncatt_get(tmp_nc, tmp_varname, "units")
         if (!tmp_unit$hasatt) {
           warning(
             "No unit attribute set for ", sQuote(tmp_varname),
@@ -884,7 +926,7 @@ if (process_fertilizer) {
             call. = FALSE,
             immediate. = TRUE
           )
-        } else if (!ud.are.convertible(tmp_unit$value, "m2")) {
+        } else if (!units::ud_are_convertible(tmp_unit$value, "m2")) {
           warning(
             "Unit attribute ", sQuote(tmp_unit$value),
             " set for ", sQuote(tmp_varname), " in file ", sQuote(filename),
@@ -895,7 +937,7 @@ if (process_fertilizer) {
           )
         }
       }
-      nc_close(tmp_nc)
+      ncdf4::nc_close(tmp_nc)
     }
   }
   # Check if crop names already contain rainfed/irrigated attribute.
@@ -933,7 +975,7 @@ if (process_fertilizer) {
       )
     }
   } else if (!all(grepl("rainfed|irrigated", ha_weighting_crop_names)) &&
-    (any(grepl("rainfed", cft_bands)) && any(grepl("irrigated", cft_bands)))
+      (any(grepl("rainfed", cft_bands)) && any(grepl("irrigated", cft_bands)))
   ) {
     # There are rainfed and irrigated CFT bands.
     # There are no separate variables for rainfed and irrigated harvested areas,
@@ -959,21 +1001,36 @@ if (process_fertilizer) {
         use_mapping <- rbind(
           use_mapping,
           data.frame(
-            crop_type_mapping[, fertilizer_pattern_map_col],
+            crop_type_mapping[, LandInG_setup$fertilizer$fertilizer_pattern_map_col],
             ifelse(
-              nchar(crop_type_mapping[, monfreda_map_col]) > 0,
-              paste(irr, crop_type_mapping[, monfreda_map_col]),
+              nchar(
+                crop_type_mapping[, LandInG_setup$fertilizer$monfreda_map_col]
+              ) > 0,
+              paste(
+                irr,
+                crop_type_mapping[, LandInG_setup$fertilizer$monfreda_map_col]
+              ),
               NA
             ),
             ifelse(
-              nchar(crop_type_mapping[, fao_name_map_col]) > 0,
-              paste(irr, crop_type_mapping[, fao_name_map_col]),
+              nchar(
+                crop_type_mapping[, LandInG_setup$fertilizer$fao_name_map_col]
+              ) > 0,
+              paste(
+                irr,
+                crop_type_mapping[, LandInG_setup$fertilizer$fao_name_map_col]
+              ),
               NA
             ),
-            crop_type_mapping[, fao_code_map_col],
+            crop_type_mapping[, LandInG_setup$fertilizer$fao_code_map_col],
             ifelse(
-              nchar(crop_type_mapping[, cft_map_col]) > 0,
-              paste(irr, crop_type_mapping[, cft_map_col]),
+              nchar(
+                crop_type_mapping[, LandInG_setup$fertilizer$cft_map_col]
+              ) > 0,
+              paste(
+                irr,
+                crop_type_mapping[, LandInG_setup$fertilizer$cft_map_col]
+              ),
               NA
             ),
             check.names = FALSE
@@ -985,73 +1042,85 @@ if (process_fertilizer) {
     }
     if (ncol(use_mapping) > 0) {
       colnames(use_mapping) <- c(
-        fertilizer_pattern_map_col,
-        monfreda_map_col,
-        fao_name_map_col,
-        fao_code_map_col,
-        cft_map_col
+        LandInG_setup$fertilizer$fertilizer_pattern_map_col,
+        LandInG_setup$fertilizer$monfreda_map_col,
+        LandInG_setup$fertilizer$fao_name_map_col,
+        LandInG_setup$fertilizer$fao_code_map_col,
+        LandInG_setup$fertilizer$cft_map_col
       )
     }
   } else {
     col <- c(
-      fertilizer_pattern_map_col,
-      monfreda_map_col,
-      fao_name_map_col,
-      fao_code_map_col,
-      cft_map_col
+      LandInG_setup$fertilizer$fertilizer_pattern_map_col,
+      LandInG_setup$fertilizer$monfreda_map_col,
+      LandInG_setup$fertilizer$fao_name_map_col,
+      LandInG_setup$fertilizer$fao_code_map_col,
+      LandInG_setup$fertilizer$cft_map_col
     )
     use_mapping <- crop_type_mapping[, col]
   }
   # Reduce use_mapping to CFTs included in cft_bands
-  use_mapping <- use_mapping[which(use_mapping[, cft_map_col] %in% cft_bands), ]
-  fert_bands <- which(
-    nchar(use_mapping[, fertilizer_pattern_map_col]) > 0 &
-    nchar(use_mapping[, cft_map_col]) > 0
+  index <- which(
+    use_mapping[, LandInG_setup$fertilizer$cft_map_col] %in% cft_bands
   )
-  fert_crops <- use_mapping[fert_bands, fertilizer_pattern_map_col]
+  use_mapping <- use_mapping[index, ]
+  rm(index)
+  fert_bands <- which(
+    nchar(
+      use_mapping[, LandInG_setup$fertilizer$fertilizer_pattern_map_col]
+    ) > 0 & nchar(use_mapping[, LandInG_setup$fertilizer$cft_map_col]) > 0
+  )
+  fert_crops <-
+    use_mapping[fert_bands, LandInG_setup$fertilizer$fertilizer_pattern_map_col]
 
   # Try to match crop names in harvested area time series to crop names in
   # fertilizer time series.
   fert_weighting_table <- data.frame(
     fert = fert_crops,
-    cft_band = use_mapping[fert_bands, cft_map_col],
+    cft_band = use_mapping[fert_bands, LandInG_setup$fertilizer$cft_map_col],
     weighting = rep(NA, length(fert_crops))
   )
   # FAOSTAT item name direct match
   if (!is.null(names(ha_weighting_varname))) {
-    ind <- which(use_mapping[fert_bands, fao_name_map_col] %in%
-      paste(
-        names(ha_weighting_varname),
-        rep(ha_weighting_crop_names, each = length(ha_weighting_varname))
-      )
+    ind <- which(
+      use_mapping[fert_bands, LandInG_setup$fertilizer$fao_name_map_col] %in%
+        paste(
+          names(ha_weighting_varname),
+          rep(ha_weighting_crop_names, each = length(ha_weighting_varname))
+        )
     )
   } else {
-    ind <- which(use_mapping[fert_bands, fao_name_map_col] %in%
-      ha_weighting_crop_names)
+    ind <- which(
+      use_mapping[fert_bands, LandInG_setup$fertilizer$fao_name_map_col] %in%
+        ha_weighting_crop_names
+    )
   }
   fert_weighting_table[ind, "weighting"] <-
-    use_mapping[fert_bands[ind], fao_name_map_col]
+    use_mapping[fert_bands[ind], LandInG_setup$fertilizer$fao_name_map_col]
   if (anyNA(fert_weighting_table[, "weighting"])) {
     # Monfreda name match
     if (!is.null(names(ha_weighting_varname))) {
       ind <- which(is.na(fert_weighting_table[, "weighting"]) &
-        use_mapping[fert_bands, monfreda_map_col] %in% setdiff(
-          paste(
-            names(ha_weighting_varname),
-            rep(ha_weighting_crop_names, each = length(ha_weighting_varname))
-          ),
-          na.omit(fert_weighting_table[, "weighting"])
-        )
+        use_mapping[fert_bands, LandInG_setup$fertilizer$monfreda_map_col] %in%
+          setdiff(
+            paste(
+              names(ha_weighting_varname),
+              rep(ha_weighting_crop_names, each = length(ha_weighting_varname))
+            ),
+            na.omit(fert_weighting_table[, "weighting"])
+          )
       )
     } else {
       ind <- which(is.na(fert_weighting_table[, "weighting"]) &
-        use_mapping[fert_bands, monfreda_map_col] %in% setdiff(
-          ha_weighting_crop_names, na.omit(fert_weighting_table[, "weighting"])
-        )
+        use_mapping[fert_bands, LandInG_setup$fertilizer$monfreda_map_col] %in%
+          setdiff(
+            ha_weighting_crop_names,
+            na.omit(fert_weighting_table[, "weighting"])
+          )
       )
     }
     fert_weighting_table[ind, "weighting"] <-
-      use_mapping[fert_bands[ind], monfreda_map_col]
+      use_mapping[fert_bands[ind], LandInG_setup$fertilizer$monfreda_map_col]
   }
   if (anyNA(fert_weighting_table[, "weighting"])) {
     # Fertilizer crops with missing harvested area crop name
@@ -1071,11 +1140,13 @@ if (process_fertilizer) {
     } else {
       avail <- setdiff(ha_weighting_crop_names, fert_weighting_table$weighting)
     }
-    distmatrix <- stringdistmatrix(
+    distmatrix <- stringdist::stringdistmatrix(
       ifelse(
-        is.na(use_mapping[missing_map, fao_name_map_col]),
+        is.na(
+          use_mapping[missing_map, LandInG_setup$fertilizer$fao_name_map_col]
+        ),
         "",
-        use_mapping[missing_map, fao_name_map_col]
+        use_mapping[missing_map, LandInG_setup$fertilizer$fao_name_map_col]
       ),
       avail
     )
@@ -1086,7 +1157,7 @@ if (process_fertilizer) {
         sub(
           "rainfed |irrigated ",
           "",
-          use_mapping[missing_map, fao_name_map_col]
+          use_mapping[missing_map, LandInG_setup$fertilizer$fao_name_map_col]
         )
       ) / 2,
       avail[apply(distmatrix, 1, which.min)],
@@ -1117,33 +1188,19 @@ if (process_fertilizer) {
             fert_weighting_table$weighting
           )
         }
-        if (nchar(use_mapping[missing_map[ind], fao_name_map_col]) > 3 &
-          length(
-            grep(
-              use_mapping[missing_map[ind], fao_name_map_col],
-              avail,
-              ignore.case = TRUE
-            )
-          ) == 1
-        ) {
+        txt <- use_mapping[missing_map[ind], LandInG_setup$fertilizer$fao_name_map_col]
+        if (nchar(txt) > 3 && length(grep(txt, avail, ignore.case = TRUE)) == 1) {
           fert_weighting_table[missing_crop[ind], "weighting"] <- grep(
-            use_mapping[missing_map[ind], fao_name_map_col],
+            txt,
             avail,
             ignore.case = TRUE,
             value = TRUE
           )
         }
-        if (nchar(use_mapping[missing_map[ind], monfreda_map_col]) > 3 &
-          length(
-            grep(
-              use_mapping[missing_map[ind], monfreda_map_col],
-              avail,
-              ignore.case = TRUE
-            )
-          ) == 1
-        ) {
+        txt <- use_mapping[missing_map[ind], LandInG_setup$fertilizer$monfreda_map_col]
+        if (nchar(txt) > 3 && length(grep(txt, avail, ignore.case = TRUE)) == 1) {
           fert_weighting_table[missing_crop[ind], "weighting"] <- grep(
-            use_mapping[missing_map[ind], "Monfreda_name"],
+            txt,
             avail,
             ignore.case = TRUE,
             value = TRUE
@@ -1161,7 +1218,8 @@ if (process_fertilizer) {
       )
       tmp_table <- data.frame(
         Fertilizer_name = fert_weighting_table[inserted, "fert"],
-        Declared_ha_name = use_mapping[inserted_map, fao_name_map_col],
+        Declared_ha_name =
+          use_mapping[inserted_map, LandInG_setup$fertilizer$fao_name_map_col],
         Assigned_ha_name =  fert_weighting_table[inserted, "weighting"]
       )
       saved_width <- options()$width
@@ -1172,7 +1230,7 @@ if (process_fertilizer) {
       print(tmp_table)
       cat(
         "Check if these are correct and consider updating mapping_file",
-        sQuote(mapping_file), "\n"
+        sQuote(LandInG_setup$fertilizer$mapping_file), "\n"
       )
       rm(tmp_table)
       options(width = saved_width)
@@ -1180,8 +1238,9 @@ if (process_fertilizer) {
   }
   # Check if there are still any missing assignments for bands supposed to use
   # harvested area weighting
-  missing_weighting_ha <- which(is.na(fert_weighting_table$weighting) &
-    fert_weighting_table$cft_band %in% cft_bands[ha_weighting_bands]
+  missing_weighting_ha <- which(
+    is.na(fert_weighting_table$weighting) &
+      fert_weighting_table$cft_band %in% cft_bands[ha_weighting_bands]
   )
   if (length(missing_weighting_ha) > 0) {
     # Fail if any fertilizer crop from mapping file cannot be assigned a
@@ -1193,7 +1252,10 @@ if (process_fertilizer) {
         sapply(
           rbind(tmp_table, colnames(tmp_table)),
           function(indata) nchar(ifelse(is.na(indata), "NA", indata))
-        ), 2, max)
+        ),
+        2,
+        max
+      )
     ) + 10
     # Redirect the following cat and print statements to stderr to appear with
     # stop message.
@@ -1206,16 +1268,19 @@ if (process_fertilizer) {
     print(tmp_table)
     options(width = saved_width)
     sink()
-    stop(paste("Please check crop_type_mapping from", sQuote(mapping_file)))
+    stop(
+      "Please check crop_type_mapping from ",
+      sQuote(LandInG_setup$fertilizer$mapping_file)
+    )
   }
   # Crop to output spatial extent if source data has larger extent.
-  ha_weighting_raster <- crop(ha_weighting_raster, cft_raster)
+  ha_weighting_raster <- terra::crop(ha_weighting_raster, cft_raster)
   # Compare to all detected version of fertilizer time series
   ha_weighting_res_match <- character(0)
   for (fert_opt in fert_dir) {
-    fert_raster <- raster(fert_names[[fert_opt]][1], band = 1)
-    HA2fert <- res(fert_raster) / res(ha_weighting_raster)
-    if (any(HA2fert < 0.999)) {
+    fert_raster <- terra::rast(fert_names[[fert_opt]][1], lyrs = 1)
+    ha2fert <- terra::res(fert_raster) / terra::res(ha_weighting_raster)
+    if (any(ha2fert < 0.999)) {
       # Data resolution is too coarse for fertilizer time series resolution.
       message(
         "Harvested area time series data in ",
@@ -1231,7 +1296,7 @@ if (process_fertilizer) {
       next
     }
     # Crop to output spatial extent if source data has larger extent.
-    fert_raster <- crop(fert_raster, cft_raster)
+    fert_raster <- terra::crop(fert_raster, cft_raster)
     # Check alignment and whether resolution can be aggregated.
     ha_weighting_res_check <- try(
       match_admin_to_data(
@@ -1256,9 +1321,9 @@ if (process_fertilizer) {
       next
     }
     # Check if ha_weighting_raster covers full extent of fert_raster
-    if (ncell(ha_weighting_res_check) != ncell(fert_raster)) {
+    if (terra::ncell(ha_weighting_res_check) != terra::ncell(fert_raster)) {
       message(
-        "Harvested area time series data in ", 
+        "Harvested area time series data in ",
         sQuote(dirname(ha_weighting_name_pattern)),
         " does not cover full extent of desired output grid"
       )
@@ -1269,7 +1334,7 @@ if (process_fertilizer) {
       fert_names[[fert_opt]] <- NULL
       rm(fert_raster, ha_weighting_res_check)
       next
-    }        
+    }
     rm(fert_raster, ha_weighting_res_check)
     # List harvested area time series as valid weighting option for fert_opt
     ha_weighting_res_match <- c(ha_weighting_res_match, fert_opt)
@@ -1280,7 +1345,7 @@ if (process_fertilizer) {
     ha_weighting_fileyears <- integer()
     ha_weighting_nc <- list()
     for (filename in ha_weighting_names) {
-      tmp_nc <- nc_open(filename)
+      tmp_nc <- ncdf4::nc_open(filename)
       tmp_fileyears <- nc_file_years(tmp_nc)
       ha_weighting_fileyears <- c(ha_weighting_fileyears, tmp_fileyears)
       ind <- seq(
@@ -1290,13 +1355,13 @@ if (process_fertilizer) {
       # If harvested area file is within cft_output_period save NetCDF pointer
       # for later.
       if (any(tmp_fileyears >= min(cft_output_period)) &&
-        !all(tmp_fileyears > max(cft_output_period))
+          !all(tmp_fileyears > max(cft_output_period))
       ) {
         ha_weighting_nc[[length(ha_weighting_nc) + 1]] <- tmp_nc
         names(ha_weighting_nc)[length(ha_weighting_nc)] <- min(tmp_fileyears)
       } else {
         # Close NetCDF pointer if not needed anymore.
-        nc_close(tmp_nc)
+        ncdf4::nc_close(tmp_nc)
       }
     }
     # Make sure NetCDF pointers are in chronological order
@@ -1304,7 +1369,7 @@ if (process_fertilizer) {
     # Check chronological consistency during cft_output_period
     in_period <- which(
       ha_weighting_fileyears >= min(cft_output_period) &
-      ha_weighting_fileyears <= max(cft_output_period)
+        ha_weighting_fileyears <= max(cft_output_period)
     )
     if (any(table(ha_weighting_fileyears[in_period]) > 1)) {
       # Files overlap or multiple versions of harvested area dataset matching
@@ -1340,12 +1405,12 @@ if (process_fertilizer) {
       sink()
       options(width = saved_width)
       if (length(ha_weighting_nc) > 0) {
-        sapply(ha_weighting_nc, nc_close)
+        sapply(ha_weighting_nc, ncdf4::nc_close)
       }
       stop("No compatible harvested area dataset for fertilizer time series")
     }
     if (length(in_period) != max(ha_weighting_fileyears[in_period]) -
-      min(ha_weighting_fileyears[in_period]) + 1
+        min(ha_weighting_fileyears[in_period]) + 1
     ) {
       warning(
         "There are gaps in harvested area time series. ",
@@ -1363,8 +1428,7 @@ if (process_fertilizer) {
         immediate. = TRUE
       )
     }
-    if (length(in_period) != max(cft_output_period) -
-      min(cft_output_period) + 1
+    if (length(in_period) != max(cft_output_period) - min(cft_output_period) + 1
     ) {
       warning(
         "Harvested area time series does not cover the full desired ",
@@ -1390,12 +1454,12 @@ if (process_fertilizer) {
   # Optional weighting dataset used for pastures
   if (!is.null(pasture_weighting_name) && length(pasture_weighting_bands) > 0) {
     if (is.null(names(pasture_weighting_name)) &&
-      length(pasture_weighting_name) > 1
+        length(pasture_weighting_name) > 1
     ) {
       # For the moment, do not support multiple pasture_weighting_name values
       # unless they are named.
       if (exists("ha_weighting_nc") && length(ha_weighting_nc) > 0) {
-        sapply(ha_weighting_nc, nc_close)
+        sapply(ha_weighting_nc, ncdf4::nc_close)
       }
       stop(
         paste(
@@ -1411,7 +1475,7 @@ if (process_fertilizer) {
       # Force pasture_weighting_name and pasture_weighting_varname to use the
       # same names or no names.
       if (exists("ha_weighting_nc") && length(ha_weighting_nc) > 0) {
-        sapply(ha_weighting_nc, nc_close)
+        sapply(ha_weighting_nc, ncdf4::nc_close)
       }
       stop(
         paste(
@@ -1421,7 +1485,7 @@ if (process_fertilizer) {
       )
     }
     if (!is.null(names(pasture_weighting_varname)) &&
-      !all(names(pasture_weighting_varname) %in% c("rainfed", "irrigated"))
+        !all(names(pasture_weighting_varname) %in% c("rainfed", "irrigated"))
     ) {
       # Only support "rainfed" and "irrigated" as names for
       # pasture_weighting_varname
@@ -1440,7 +1504,7 @@ if (process_fertilizer) {
         )
       )
     }
-      
+
     pasture_weighting_res_match <- character(0)
     pasture_weighting_is_fractional <- FALSE
     for (pasture_opt in names(pasture_weighting_varname)) {
@@ -1451,17 +1515,17 @@ if (process_fertilizer) {
         pasture_weighting_name,
         pasture_weighting_name[pasture_opt]
       )
-      pasture_raster <- raster(
+      pasture_raster <- terra::rast(
         tmp_filename,
-        band = 1,
-        varname = pasture_weighting_varname[pasture_opt]
+        lyrs = 1,
+        subds = pasture_weighting_varname[pasture_opt]
       )
-      
+
       # Crop to output spatial extent if source data has larger extent.
-      pasture_raster <- crop(pasture_raster, cft_raster)
+      pasture_raster <- terra::crop(pasture_raster, cft_raster)
       for (fert_opt in fert_dir) {
-        fert_raster <- raster(fert_names[[fert_opt]][1], band = 1)
-        pasture2fert <- res(fert_raster) / res(pasture_raster)
+        fert_raster <- terra::rast(fert_names[[fert_opt]][1], lyrs = 1)
+        pasture2fert <- terra::res(fert_raster) / terra::res(pasture_raster)
         if (any(pasture2fert < 0.999)) {
           # Data resolution is too coarse for fertilizer time series resolution.
           message(
@@ -1478,7 +1542,7 @@ if (process_fertilizer) {
           next
         }
         # Crop to output spatial extent if source data has larger extent.
-        fert_raster <- crop(fert_raster, cft_raster)
+        fert_raster <- terra::crop(fert_raster, cft_raster)
         # Check alignment and whether resolution can be aggregated.
         pasture_weighting_res_check <- try(
           match_admin_to_data(
@@ -1508,7 +1572,9 @@ if (process_fertilizer) {
           next
         }
         # Check if pasture_raster covers full extent of fert_raster
-        if (ncell(pasture_weighting_res_check) != ncell(fert_raster)) {
+        if (terra::ncell(pasture_weighting_res_check) !=
+            terra::ncell(fert_raster)
+        ) {
           message(
             "Pasture time series data in ", sQuote(tmp_filename),
             " does not cover full extent of desired output grid"
@@ -1526,7 +1592,7 @@ if (process_fertilizer) {
           )
           rm(fert_raster, pasture_weighting_res_check)
           next
-        }        
+        }
         rm(fert_raster, pasture_weighting_res_check)
         # List pasture time series as valid weighting option for fert_opt
         pasture_weighting_res_match <- union(
@@ -1535,13 +1601,14 @@ if (process_fertilizer) {
         )
       }
       # Set weighting in use_mapping
-      r <- which(fert_weighting_table[, "cft_band"] %in%
-        grep(pasture_opt, cft_bands[pasture_weighting_bands], value = TRUE)
+      r <- which(
+        fert_weighting_table[, "cft_band"] %in%
+          grep(pasture_opt, cft_bands[pasture_weighting_bands], value = TRUE)
       )
       fert_weighting_table[r, "weighting"] <- paste(pasture_opt, "pasture")
     }
     missing_weighting_pasture <- which(is.na(fert_weighting_table$weighting) &
-      fert_weighting_table$cft_band %in% cft_bands[pasture_weighting_bands]
+        fert_weighting_table$cft_band %in% cft_bands[pasture_weighting_bands]
     )
     if (length(missing_weighting_pasture) > 0) {
       # By default, HYDE grazing land does not have any irrigated pasture.
@@ -1578,14 +1645,14 @@ if (process_fertilizer) {
       # Check file years in pasture weighting file(s)
       for (pasture_weighting_opt in seq_along(pasture_weighting_name)) {
         filename <- pasture_weighting_name[pasture_weighting_opt]
-        tmp_nc <- nc_open(filename)
+        tmp_nc <- ncdf4::nc_open(filename)
         tmp_fileyears <- nc_file_years(tmp_nc)
         in_period <- which(
           tmp_fileyears >= min(cft_output_period) &
-          tmp_fileyears <= max(cft_output_period)
+            tmp_fileyears <= max(cft_output_period)
         )
         if (length(in_period) != max(tmp_fileyears[in_period]) -
-          min(tmp_fileyears[in_period]) + 1
+            min(tmp_fileyears[in_period]) + 1
         ) {
           warning(
             "There are gaps in pasture time series ",
@@ -1593,7 +1660,9 @@ if (process_fertilizer) {
             ". Missing years: ",
             toString(
               setdiff(
-                seq(min(tmp_fileyears[in_period]), max(tmp_fileyears[in_period])),
+                seq(
+                  min(tmp_fileyears[in_period]), max(tmp_fileyears[in_period])
+                ),
                 tmp_fileyears
               )
             ),
@@ -1602,7 +1671,7 @@ if (process_fertilizer) {
           )
         }
         if (length(in_period) != max(cft_output_period) -
-          min(cft_output_period) + 1
+            min(cft_output_period) + 1
         ) {
           warning(
             "Warning: pasture time series ",
@@ -1616,7 +1685,7 @@ if (process_fertilizer) {
         # file.
         for (tmp_varname in pasture_weighting_varname) {
           if (tmp_varname %in% names(tmp_nc$var)) {
-            tmp_unit <- ncatt_get(tmp_nc, tmp_varname, "units")
+            tmp_unit <- ncdf4::ncatt_get(tmp_nc, tmp_varname, "units")
             if (!tmp_unit$hasatt) {
               warning(
                 "No unit attribute set in ", sQuote(filename),
@@ -1631,12 +1700,12 @@ if (process_fertilizer) {
               tmp_unit$value <- pasture_weighting_unit
             }
             pasture_weighting_is_fractional <- FALSE
-            if (!ud.are.convertible(tmp_unit$value, "m2")) {
+            if (!units::ud_are_convertible(tmp_unit$value, "m2")) {
               # Pasture is not an absolute area.
-              if (ud.are.convertible(tmp_unit$value, "1")) {
+              if (units::ud_are_convertible(tmp_unit$value, "1")) {
                 pasture_weighting_is_fractional <- TRUE
                 if (is.null(pasture_weighting_area_file) ||
-                  !file.exists(pasture_weighting_area_file)
+                    !file.exists(pasture_weighting_area_file)
                 ) {
                   if (!is.null(pasture_weighting_area_file)) {
                     warning(
@@ -1656,8 +1725,9 @@ if (process_fertilizer) {
                     immediate. = TRUE
                   )
                 } else {
-                  pasture_area_raster <- raster(pasture_weighting_area_file)
-                  pasture_area_raster <- crop(
+                  pasture_area_raster <-
+                    terra::rast(pasture_weighting_area_file)
+                  pasture_area_raster <- terra::crop(
                     pasture_area_raster,
                     pasture_raster
                   )
@@ -1696,7 +1766,7 @@ if (process_fertilizer) {
           }
         }
         rm(pasture_raster)
-        nc_close(tmp_nc)
+        ncdf4::nc_close(tmp_nc)
       }
       cat(
         "Compatible pasture time series",
@@ -1707,16 +1777,16 @@ if (process_fertilizer) {
       # Open NetCDFs for later
       pasture_weighting_nc <- list()
       if (is.null(names(pasture_weighting_name))) {
-        pasture_weighting_nc[[1]] <- nc_open(pasture_weighting_name)
+        pasture_weighting_nc[[1]] <- ncdf4::nc_open(pasture_weighting_name)
       } else {
         for (pasture_weighting_opt in names(pasture_weighting_name)) {
           pasture_weighting_nc[[pasture_weighting_opt]] <-
-            nc_open(pasture_weighting_name[pasture_weighting_opt])
+            ncdf4::nc_open(pasture_weighting_name[pasture_weighting_opt])
         }
       }
     } else {
       if (exists("ha_weighting_nc") && length(ha_weighting_nc) > 0) {
-        sapply(ha_weighting_nc, nc_close)
+        sapply(ha_weighting_nc, ncdf4::nc_close)
       }
       stop(
         paste(
@@ -1755,7 +1825,7 @@ if (process_fertilizer) {
         paste("Unexpected error determining file for crop", sQuote(crop_name))
       )
     }
-    fert_nc[[crop_name]] <- nc_open(fert_names[[fert_dir]][fileindex])
+    fert_nc[[crop_name]] <- ncdf4::nc_open(fert_names[[fert_dir]][fileindex])
   }
 }
 if (process_manure && any(cft_bands_get_manure)) {
@@ -1764,48 +1834,50 @@ if (process_manure && any(cft_bands_get_manure)) {
     # Use manure_cropland_name and corresponding variables from
     # fertilizer_setup.R
     manure_weighting_name <- ifelse(
-      is.null(manure_cropland_name),
+      is.null(LandInG_setup$fertilizer$manure_cropland_name),
       NULL,
       ifelse(
-        is.null(names(manure_cropland_name)) && length(manure_cropland_name) == 1,
-        manure_cropland_name,
+        is.null(names(LandInG_setup$fertilizer$manure_cropland_name)) &&
+          length(LandInG_setup$fertilizer$manure_cropland_name) == 1,
+        LandInG_setup$fertilizer$manure_cropland_name,
         ifelse(
-          cft_nut %in% names(manure_cropland_name),
-          manure_cropland_name[cft_nut],
+          cft_nut %in% names(LandInG_setup$fertilizer$manure_cropland_name),
+          LandInG_setup$fertilizer$manure_cropland_name[cft_nut],
           NULL
         )
       )
     )
     manure_weighting_varname <- ifelse(
-      is.null(names(manure_cropland_varname)) &&
-        length(manure_cropland_varname) == 1,
-      manure_cropland_varname,
-      manure_cropland_varname[cft_nut]
+      is.null(names(LandInG_setup$fertilizer$manure_cropland_varname)) &&
+        length(LandInG_setup$fertilizer$manure_cropland_varname) == 1,
+      LandInG_setup$fertilizer$manure_cropland_varname,
+      LandInG_setup$fertilizer$manure_cropland_varname[cft_nut]
     )
     manure_weighting_unit <- ifelse(
-      is.null(names(manure_cropland_unit)) && length(manure_cropland_unit) == 1,
-      manure_cropland_unit,
-      manure_cropland_unit[cft_nut]
+      is.null(names(LandInG_setup$fertilizer$manure_cropland_unit)) &&
+        length(LandInG_setup$fertilizer$manure_cropland_unit) == 1,
+      LandInG_setup$fertilizer$manure_cropland_unit,
+      LandInG_setup$fertilizer$manure_cropland_unit[cft_nut]
     )
     manure_weighting_area_file <- ifelse(
-      is.null(manure_cropland_area_file),
+      is.null(LandInG_setup$fertilizer$manure_cropland_area_file),
       NULL,
       ifelse(
-        is.null(names(manure_cropland_area_file)) &&
-          length(manure_cropland_area_file) == 1,
-        manure_cropland_area_file,
+        is.null(names(LandInG_setup$fertilizer$manure_cropland_area_file)) &&
+          length(LandInG_setup$fertilizer$manure_cropland_area_file) == 1,
+        LandInG_setup$fertilizer$manure_cropland_area_file,
         ifelse(
-          nut %in% names(manure_cropland_area_file),
-          manure_cropland_area_file[nut],
+          cft_nut %in% names(LandInG_setup$fertilizer$manure_cropland_area_file),
+          LandInG_setup$fertilizer$manure_cropland_area_file[cft_nut],
           NULL
         )
       )
     )
     manure_weighting_area_file_unit <- ifelse(
-      is.null(names(manure_cropland_area_file_unit)) &&
-        length(manure_cropland_area_file_unit) == 1,
-      manure_cropland_area_file_unit,
-      manure_cropland_area_file_unit[nut]
+      is.null(names(LandInG_setup$fertilizer$manure_cropland_area_file_unit)) &&
+        length(LandInG_setup$fertilizer$manure_cropland_area_file_unit) == 1,
+      LandInG_setup$fertilizer$manure_cropland_area_file_unit,
+      LandInG_setup$fertilizer$manure_cropland_area_file_unit[cft_nut]
     )
     if (!is.null(manure_weighting_name)) {
       warning(
@@ -1848,11 +1920,11 @@ if (process_manure && any(cft_bands_get_manure)) {
       )
       if (is.na(filename) || !file.exists(filename)) {
         if (exists("fert_nc") && length(fert_nc) > 0)
-          sapply(fert_nc, nc_close)
+          sapply(fert_nc, ncdf4::nc_close)
         if (exists("ha_weighting_nc") && length(ha_weighting_nc) > 0)
-          sapply(ha_weighting_nc, nc_close)
+          sapply(ha_weighting_nc, ncdf4::nc_close)
         if (exists("pasture_weighting_nc") && length(pasture_weighting_nc) > 0)
-          sapply(pasture_weighting_nc, nc_close)
+          sapply(pasture_weighting_nc, ncdf4::nc_close)
         stop(
           paste0(
             "File manure_weighting_name[", sQuote(manure_weighting_opt), "] ",
@@ -1868,11 +1940,11 @@ if (process_manure && any(cft_bands_get_manure)) {
       )
       if (is.na(tmp_varname)) {
         if (exists("fert_nc") && length(fert_nc) > 0)
-          sapply(fert_nc, nc_close)
+          sapply(fert_nc, ncdf4::nc_close)
         if (exists("ha_weighting_nc") && length(ha_weighting_nc) > 0)
-          sapply(ha_weighting_nc, nc_close)
+          sapply(ha_weighting_nc, ncdf4::nc_close)
         if (exists("pasture_weighting_nc") && length(pasture_weighting_nc) > 0)
-          sapply(pasture_weighting_nc, nc_close)
+          sapply(pasture_weighting_nc, ncdf4::nc_close)
         stop(
           paste0(
             "manure_weighting_varname[", sQuote(manure_weighting_opt), "] ",
@@ -1880,22 +1952,23 @@ if (process_manure && any(cft_bands_get_manure)) {
           )
         )
       }
-        
-      manure_weighting_raster <- raster(
+
+      manure_weighting_raster <- terra::rast(
         filename,
-        varname = tmp_varname,
-        band = 1
+        subds = tmp_varname,
+        lyrs = 1
       )
       # Crop to output spatial extent if source data has larger extent.
-      manure_weighting_raster <- crop(manure_weighting_raster, cft_raster)
+      manure_weighting_raster <- terra::crop(manure_weighting_raster, cft_raster)
       # Compare with all available manure source datasets.
       for (manure_opt in manure_dir) {
-        manure_raster <- raster(
+        manure_raster <- terra::rast(
           manure_names[[manure_opt]][1],
-          band = 1,
-          varname = paste0("manure_", cft_nut, "_rate")
+          lyrs = 1,
+          subds = paste0("manure_", cft_nut, "_rate")
         )
-        cropland2manure <- res(manure_raster) / res(manure_weighting_raster)
+        cropland2manure <- terra::res(manure_raster) /
+          terra::res(manure_weighting_raster)
         if (any(cropland2manure < 0.999)) {
           # Data resolution is too coarse for manure time series resolution.
           message(
@@ -1917,7 +1990,7 @@ if (process_manure && any(cft_bands_get_manure)) {
           next
         }
         # Crop to output spatial extent if source data has larger extent.
-        manure_raster <- crop(manure_raster, cft_raster)
+        manure_raster <- terra::crop(manure_raster, cft_raster)
         # Check alignment and whether resolution can be aggregated.
         manure_weighting_res_check <- try(
           match_admin_to_data(
@@ -1947,7 +2020,9 @@ if (process_manure && any(cft_bands_get_manure)) {
           next
         }
         # Check if manure_weighting_raster covers full extent of manure_raster
-        if (ncell(manure_weighting_res_check) != ncell(manure_raster)) {
+        if (terra::ncell(manure_weighting_res_check) !=
+            terra::ncell(manure_raster)
+        ) {
           message(
             "Manure weighting time series data in ", sQuote(filename),
             " does not cover full extent of desired output grid"
@@ -1965,7 +2040,7 @@ if (process_manure && any(cft_bands_get_manure)) {
             manure_opt
           )
           next
-        }        
+        }
         rm(manure_raster, manure_weighting_res_check)
         # List cropland time series as valid weighting option for manure_opt
         manure_weighting_res_match <- union(
@@ -1977,14 +2052,14 @@ if (process_manure && any(cft_bands_get_manure)) {
     if (length(manure_weighting_res_match) > 0) {
       # Check file years in pasture weighting file(s)
       for (filename in manure_weighting_name) {
-        tmp_nc <- nc_open(filename)
+        tmp_nc <- ncdf4::nc_open(filename)
         tmp_fileyears <- nc_file_years(tmp_nc)
         in_period <- which(
           tmp_fileyears >= min(cft_output_period) &
-          tmp_fileyears <= max(cft_output_period)
+            tmp_fileyears <= max(cft_output_period)
         )
         if (length(in_period) != max(tmp_fileyears[in_period]) -
-          min(tmp_fileyears[in_period]) + 1
+            min(tmp_fileyears[in_period]) + 1
         ) {
           warning(
             "There are gaps in manure weighting time series ",
@@ -2004,7 +2079,7 @@ if (process_manure && any(cft_bands_get_manure)) {
           )
         }
         if (length(in_period) != max(cft_output_period) -
-          min(cft_output_period) + 1
+            min(cft_output_period) + 1
         ) {
           warning(
             "Manure weighting time series ",
@@ -2018,7 +2093,7 @@ if (process_manure && any(cft_bands_get_manure)) {
         # file.
         for (tmp_varname in manure_weighting_varname) {
           if (tmp_varname %in% names(tmp_nc$var)) {
-            tmp_unit <- ncatt_get(tmp_nc, tmp_varname, "units")
+            tmp_unit <- ncdf4::ncatt_get(tmp_nc, tmp_varname, "units")
             if (!tmp_unit$hasatt) {
               warning(
                 "No unit attribute set in ", sQuote(filename),
@@ -2033,14 +2108,14 @@ if (process_manure && any(cft_bands_get_manure)) {
               tmp_unit$value <- manure_weighting_unit
             }
             manure_weighting_is_fractional <- FALSE
-            if (!ud.are.convertible(tmp_unit$value, "m2")) {
+            if (!units::ud_are_convertible(tmp_unit$value, "m2")) {
               # Manure weighting is not an absolute area.
-              if (ud.are.convertible(tmp_unit$value, "1")) {
+              if (units::ud_are_convertible(tmp_unit$value, "1")) {
                 manure_weighting_is_fractional <- TRUE
                 if (is.null(manure_weighting_area_file) ||
-                  !file.exists(manure_weighting_area_file)
+                    !file.exists(manure_weighting_area_file)
                 ) {
-                  if (!is.null(maure_weighting_area_file)) {
+                  if (!is.null(manure_weighting_area_file)) {
                     warning(
                       "Defined manure_weighting_area_file ",
                       sQuote(filename),
@@ -2058,8 +2133,8 @@ if (process_manure && any(cft_bands_get_manure)) {
                     immediate. = TRUE
                   )
                 } else {
-                  manure_area_raster <- raster(manure_weighting_area_file)
-                  manure_area_raster <- crop(
+                  manure_area_raster <- terra::rast(manure_weighting_area_file)
+                  manure_area_raster <- terra::crop(
                     manure_area_raster,
                     manure_weighting_raster
                   )
@@ -2074,13 +2149,13 @@ if (process_manure && any(cft_bands_get_manure)) {
                   )
                   if (class(manure_area_res_check) == "try-error") {
                     if (exists("fert_nc") && length(fert_nc) > 0)
-                      sapply(fert_nc, nc_close)
+                      sapply(fert_nc, ncdf4::nc_close)
                     if (exists("ha_weighting_nc") && length(ha_weighting_nc) > 0)
-                      sapply(ha_weighting_nc, nc_close)
+                      sapply(ha_weighting_nc, ncdf4::nc_close)
                     if (exists("pasture_weighting_nc") &&
-                      length(pasture_weighting_nc) > 0
+                        length(pasture_weighting_nc) > 0
                     )
-                      sapply(pasture_weighting_nc, nc_close)
+                      sapply(pasture_weighting_nc, ncdf4::nc_close)
                     stop(
                       paste(
                         "Manure weighting area",
@@ -2106,10 +2181,10 @@ if (process_manure && any(cft_bands_get_manure)) {
             }
           }
         }
-        nc_close(tmp_nc)
+        ncdf4::nc_close(tmp_nc)
       }
       cat(
-        "Compatible time series", 
+        "Compatible time series",
         toString(sQuote(manure_weighting_name)),
         "found as weighting dataset for manure time series in",
         toString(sQuote(fert_dir)), "\n"
@@ -2123,17 +2198,18 @@ if (process_manure && any(cft_bands_get_manure)) {
         } else {
           name <- names(manure_weighting_name)[findex]
         }
-        manure_weighting_nc[[name]] <- nc_open(manure_weighting_name[name])
+        manure_weighting_nc[[name]] <-
+          ncdf4::nc_open(manure_weighting_name[name])
         manure_weighting_years[[name]] <-
           nc_file_years(manure_weighting_nc[[name]])
       }
     } else {
       if (exists("fert_nc") && length(fert_nc) > 0)
-        sapply(fert_nc, nc_close)
+        sapply(fert_nc, ncdf4::nc_close)
       if (exists("ha_weighting_nc") && length(ha_weighting_nc) > 0)
-        sapply(ha_weighting_nc, nc_close)
+        sapply(ha_weighting_nc, ncdf4::nc_close)
       if (exists("pasture_weighting_nc") && length(pasture_weighting_nc) > 0)
-        sapply(pasture_weighting_nc, nc_close)
+        sapply(pasture_weighting_nc, ncdf4::nc_close)
       stop(
         paste(
           "No compatible time series found to use as weighting",
@@ -2143,11 +2219,11 @@ if (process_manure && any(cft_bands_get_manure)) {
     }
   } else if (any(cft_bands_get_manure)) {
     if (exists("fert_nc") && length(fert_nc) > 0)
-      sapply(fert_nc, nc_close)
+      sapply(fert_nc, ncdf4::nc_close)
     if (exists("ha_weighting_nc") && length(ha_weighting_nc) > 0)
-      sapply(ha_weighting_nc, nc_close)
+      sapply(ha_weighting_nc, ncdf4::nc_close)
     if (exists("pasture_weighting_nc") && length(pasture_weighting_nc) > 0)
-      sapply(pasture_weighting_nc, nc_close)
+      sapply(pasture_weighting_nc, ncdf4::nc_close)
     stop(
       paste(
         "You have set no cropland weighting dataset to use for",
@@ -2167,7 +2243,7 @@ if (process_manure && any(cft_bands_get_manure)) {
   manure_nc <- manure_years <- list()
   i <- 1
   for (filename in manure_names[[manure_dir]]) {
-    manure_nc[[i]] <- nc_open(filename)
+    manure_nc[[i]] <- ncdf4::nc_open(filename)
     manure_years[[i]] <- nc_file_years(manure_nc[[i]])
     i <- i + 1
   }
@@ -2179,8 +2255,8 @@ if (process_manure && any(cft_bands_get_manure)) {
 ## Set up generated files                                                     ##
 cat("*** Set up files generated by this script ***\n")
 cft_output_mass_unit <- regmatches(
-    cft_output_unit,
-    regexpr("^[a-zA-Z]+", cft_output_unit)
+  cft_output_unit,
+  regexpr("^[a-zA-Z]+", cft_output_unit)
 )
 cft_output_area_unit <- ifelse(
   grepl("km-2|/[ ]?km2", cft_output_unit),
@@ -2203,14 +2279,15 @@ cft_output_area_unit <- ifelse(
 fert_output_name <- paste0(
   "fert_",
   ifelse(
-    process_manure && combine_fertilizer_manure && any(cft_bands_get_manure),
+    process_manure && LandInG_setup$fertilizer$combine_fertilizer_manure &&
+      any(cft_bands_get_manure),
     "manure_",
     ""
   ),
   cft_nut,
   ifelse(
     nchar(aggregation_name) > 0,
-    paste0("_", aggregation_name, "_CFT_aggregation_"),
+    paste0("_", aggregation_name, "_cft_aggregation_"),
     "_"
   ),
   ifelse(nchar(version_string) > 0, paste0(version_string, "_"), ""),
@@ -2222,7 +2299,7 @@ manure_output_name <- paste0(
   "manure_", cft_nut,
   ifelse(
     nchar(aggregation_name) > 0,
-    paste0("_", aggregation_name, "_CFT_aggregation_"),
+    paste0("_", aggregation_name, "_cft_aggregation_"),
     "_"
   ),
   ifelse(nchar(version_string) > 0, paste0(version_string, "_"), ""),
@@ -2234,7 +2311,7 @@ manure_noalloc_global_name <- paste0(
   "manure_noalloc_", cft_nut,
   ifelse(
     nchar(aggregation_name) > 0,
-    paste0("_", aggregation_name, "_CFT_aggregation_"),
+    paste0("_", aggregation_name, "_cft_aggregation_"),
     "_"
   ),
   ifelse(nchar(version_string) > 0, paste0(version_string, "_"), ""),
@@ -2249,7 +2326,7 @@ if (cft_format == "CLM") {
     "manure_noalloc_", cft_nut,
     ifelse(
       nchar(aggregation_name) > 0,
-      paste0("_", aggregation_name, "_CFT_aggregation_"),
+      paste0("_", aggregation_name, "_cft_aggregation_"),
       "_"
     ),
     ifelse(nchar(version_string) > 0, paste0(version_string, "_"), ""),
@@ -2261,7 +2338,7 @@ if (cft_format == "CLM") {
     "fert_noalloc_", cft_nut,
     ifelse(
       nchar(aggregation_name) > 0,
-      paste0("_", aggregation_name, "_CFT_aggregation_"),
+      paste0("_", aggregation_name, "_cft_aggregation_"),
       "_"
     ),
     ifelse(nchar(version_string) > 0, paste0(version_string, "_"), ""),
@@ -2272,38 +2349,38 @@ if (cft_format == "CLM") {
 }
 if (cft_format == "NetCDF") {
   # Set up dimensions and variables
-  lon_dim <- ncdim_def(
+  lon_dim <- ncdf4::ncdim_def(
     name = "longitude",
     units = "degrees_east",
-    vals = xFromCol(cft_raster),
+    vals = terra::xFromCol(cft_raster),
     longname = "Longitude"
   )
-  lat_dim <- ncdim_def(
+  lat_dim <- ncdf4::ncdim_def(
     name = "latitude",
     units = "degrees_north",
-    vals = yFromRow(cft_raster),
+    vals = terra::yFromRow(cft_raster),
     longname = "Latitude"
   )
   # CFT dimension. Note: default name is chosen to be compatible with LPJmL.
-  cft_dim <- ncdim_def(
+  cft_dim <- ncdf4::ncdim_def(
     name = "pft",
     units = "",
     vals = seq_along(cft_bands),
     create_dimvar = FALSE
   )
-  time_dim <- ncdim_def(
+  time_dim <- ncdf4::ncdim_def(
     name = "time",
     units = "year",
     vals = seq(min(cft_output_period), max(cft_output_period)),
     unlim = TRUE
   )
-  len_dim <- ncdim_def(
+  len_dim <- ncdf4::ncdim_def(
     name = "len",
     units = "",
     vals = seq_len(max(nchar(cft_bands))),
     create_dimvar = FALSE
   )
-  name_var <- ncvar_def(
+  name_var <- ncdf4::ncvar_def(
     name = "NamePFT",
     units = "",
     dim = list(len_dim, cft_dim),
@@ -2311,14 +2388,17 @@ if (cft_format == "NetCDF") {
     prec = "char"
   )
   if (process_fertilizer ||
-    (process_manure && combine_fertilizer_manure && any(cft_bands_get_manure))
+      (process_manure && LandInG_setup$fertilizer$combine_fertilizer_manure &&
+         any(cft_bands_get_manure))
   ) {
     included <- character(0)
     if (process_fertilizer)
       included <- c(included, "Fertilizer")
-    if (process_manure && combine_fertilizer_manure && any(cft_bands_get_manure))
+    if (process_manure && LandInG_setup$fertilizer$combine_fertilizer_manure &&
+        any(cft_bands_get_manure)
+    )
       included <- c(included, "Manure")
-    fert_output_var <- ncvar_def(
+    fert_output_var <- ncdf4::ncvar_def(
       name = ifelse(process_fertilizer, "fert", "manu"),
       units = cft_output_unit,
       dim = list(lon_dim, lat_dim, cft_dim, time_dim),
@@ -2327,10 +2407,11 @@ if (cft_format == "NetCDF") {
         paste(included, collapse = " & "),
         " ", cft_nut, " application rate",
         ifelse(
-          "manure" %in% included & manure_availability_scalar != 1,
+          "manure" %in% included &
+            LandInG_setup$fertilizer$manure_availability_scalar != 1,
           paste0(
             " (assuming manure_availability_scalar of ",
-            manure_availability_scalar,
+            LandInG_setup$fertilizer$manure_availability_scalar,
             ")"
           ),
           ""
@@ -2340,7 +2421,7 @@ if (cft_format == "NetCDF") {
     )
   }
   if (process_fertilizer && is.finite(fert_threshold) && fert_noalloc_account) {
-    fert_noalloc_var <- ncvar_def(
+    fert_noalloc_var <- ncdf4::ncvar_def(
       name = "fert_noalloc",
       units = cft_output_unit,
       dim = list(lon_dim, lat_dim, cft_dim, time_dim),
@@ -2349,8 +2430,8 @@ if (cft_format == "NetCDF") {
       compression = 5
     )
   }
-  if (process_manure && !combine_fertilizer_manure) {
-    manure_output_var <- ncvar_def(
+  if (process_manure && !LandInG_setup$fertilizer$combine_fertilizer_manure) {
+    manure_output_var <- ncdf4::ncvar_def(
       name = "manu",
       units = cft_output_unit,
       dim = list(lon_dim, lat_dim, cft_dim, time_dim),
@@ -2360,12 +2441,12 @@ if (cft_format == "NetCDF") {
     )
   }
   if (process_manure && manure_noalloc_account &&
-    (is.finite(manure_apply_threshold) ||
-    (!tmp_is_rate || (!is.null(tmp_ref_area) && tmp_ref_area == "grid")))
+      (is.finite(manure_apply_threshold) ||
+         (!tmp_is_rate || (!is.null(tmp_ref_area) && tmp_ref_area == "grid")))
   ) {
     # Additional variable collecting manure not allocated either due to scaling
     # or due to exceeding a maximum application rate.
-    manure_noalloc_var <- ncvar_def(
+    manure_noalloc_var <- ncdf4::ncvar_def(
       name = "manure_noalloc",
       units = cft_output_mass_unit,
       dim = list(lon_dim, lat_dim, time_dim),
@@ -2389,11 +2470,11 @@ if (cft_format == "NetCDF") {
         manure_output_name, "\n"
       )
       if (is.finite(manure_apply_threshold) &&
-        manure_apply_threshold_res == "target"
+          manure_apply_threshold_res == "target"
       ) {
         cat(
           "Applying upper application threshold of",
-          ud.convert(
+          units::ud_convert(
             manure_apply_threshold,
             manure_apply_threshold_unit,
             cft_output_unit
@@ -2417,12 +2498,12 @@ if (cft_format == "NetCDF") {
         )
       )
     }
-    manure_output_nc <- nc_create(
+    manure_output_nc <- ncdf4::nc_create(
       filename = manure_output_name,
       vars = varlist
     )
     # Write CFT names to file.
-    ncvar_put(
+    ncdf4::ncvar_put(
       nc = manure_output_nc,
       varid = name_var$name,
       vals = cft_bands
@@ -2431,8 +2512,9 @@ if (cft_format == "NetCDF") {
       if (tmp_var$name != name_var$name) {
         # ncvar_def only sets "_FillValue" attribute. Also set "missing_value"
         # attribute
-        if (!ncatt_get(manure_output_nc, tmp_var$name, "missing_value")$hasatt) {
-          ncatt_put(
+        att <- ncdf4::ncatt_get(manure_output_nc, tmp_var$name, "missing_value")
+        if (!att$hasatt) {
+          ncdf4::ncatt_put(
             nc = manure_output_nc,
             varid = tmp_var$name,
             attname = "missing_value",
@@ -2442,7 +2524,7 @@ if (cft_format == "NetCDF") {
         }
       }
     }
-    nc_sync(manure_output_nc)
+    ncdf4::nc_sync(manure_output_nc)
   }
   if (exists("fert_output_var")) {
     varlist <- list(fert_output_var)
@@ -2467,12 +2549,12 @@ if (cft_format == "NetCDF") {
       )
     }
     if (grepl("manure not allocated", varstring) &&
-      is.finite(manure_apply_threshold) &&
-      manure_apply_threshold_res == "target"
+        is.finite(manure_apply_threshold) &&
+        manure_apply_threshold_res == "target"
     ) {
       cat(
         "Applying upper application threshold of",
-        ud.convert(
+        units::ud_convert(
           manure_apply_threshold,
           manure_apply_threshold_unit,
           cft_output_unit
@@ -2480,16 +2562,20 @@ if (cft_format == "NetCDF") {
         cft_output_unit, "to manure.\n"
       )
     }
-    if (process_manure && combine_fertilizer_manure) {
+    if (process_manure && LandInG_setup$fertilizer$combine_fertilizer_manure) {
       cat(
         "Manure is combined with fertilizer application rate assuming",
         ifelse(
-          manure_availability_scalar > 1,
+          LandInG_setup$fertilizer$manure_availability_scalar > 1,
           "higher", # Does not really make sense.
-          ifelse(manure_availability_scalar < 1, "lower", "full")
+          ifelse(
+            LandInG_setup$fertilizer$manure_availability_scalar < 1,
+            "lower",
+            "full"
+          )
         ),
         "plant availability with manure_availability_scalar",
-        manure_availability_scalar, "\n"
+        LandInG_setup$fertilizer$manure_availability_scalar, "\n"
       )
     }
     if (file.exists(fert_output_name)) {
@@ -2500,12 +2586,12 @@ if (cft_format == "NetCDF") {
         )
       )
     }
-    fert_output_nc <- nc_create(
+    fert_output_nc <- ncdf4::nc_create(
       filename = fert_output_name,
       vars = varlist
     )
     # Write CFT names to file.
-    ncvar_put(
+    ncdf4::ncvar_put(
       nc = fert_output_nc,
       varid = name_var$name,
       vals = cft_bands
@@ -2514,8 +2600,9 @@ if (cft_format == "NetCDF") {
       if (tmp_var$name != name_var$name) {
         # ncvar_def only sets "_FillValue" attribute. Also set "missing_value"
         # attribute
-        if (!ncatt_get(fert_output_nc, tmp_var$name, "missing_value")$hasatt) {
-          ncatt_put(
+        att <- ncdf4::ncatt_get(fert_output_nc, tmp_var$name, "missing_value")
+        if (!att$hasatt) {
+          ncdf4::ncatt_put(
             nc = fert_output_nc,
             varid = tmp_var$name,
             attname = "missing_value",
@@ -2525,11 +2612,12 @@ if (cft_format == "NetCDF") {
         }
       }
     }
-    nc_sync(fert_output_nc)
+    ncdf4::nc_sync(fert_output_nc)
   }
 } else if (cft_format == "CLM") {
   if (process_fertilizer ||
-    (process_manure && combine_fertilizer_manure && any(cft_bands))
+      (process_manure && LandInG_setup$fertilizer$combine_fertilizer_manure &&
+         any(cft_bands))
   ) {
     if (file.exists(fert_output_name)) {
       stop(
@@ -2541,26 +2629,30 @@ if (cft_format == "NetCDF") {
     }
     cat(
       "Fertilizer ",
-      ifelse(process_manure & combine_fertilizer_manure, "and manure ", ""),
+      ifelse(
+        process_manure & LandInG_setup$fertilizer$combine_fertilizer_manure,
+        "and manure ",
+        ""
+      ),
       "application rate [", cft_output_unit, "] saved to ",
       sQuote(fert_output_name), "\n",
       sep = ""
     )
-    fert_output_header <- create_header(
+    fert_output_header <- lpjmlkit::create_header(
       name = "LPJFERT",
       version = 3,
       firstyear = min(cft_output_period),
       nyear = max(cft_output_period) - min(cft_output_period) + 1,
-      ncell = cft_gridheader$header["ncell"],
+      ncell = cft_griddata$meta$ncell,
       nbands = length(cft_bands),
-      cellsize_lon = cft_gridheader$header["cellsize_lon"],
+      cellsize_lon = cft_griddata$meta$cellsize_lon,
       scalar = 1.0,
-      cellsize_lat = cft_gridheader$header["cellsize_lat"],
+      cellsize_lat = cft_griddata$meta$cellsize_lat,
       datatype = 3
     )
-    write_header(fert_output_name, fert_output_header)
+    lpjmlkit::write_header(fert_output_name, fert_output_header)
     fert_output_fp <- file(fert_output_name, "ab")
-    
+
     if (process_fertilizer && is.finite(fert_threshold)) {
       cat(
         "Applying upper application threshold of",
@@ -2582,25 +2674,25 @@ if (cft_format == "NetCDF") {
           sQuote(fert_noalloc_name), "\n",
           sep = ""
         )
-        fert_noalloc_header <- create_header(
+        fert_noalloc_header <- lpjmlkit::create_header(
           name = "LPJFERT",
           version = 3,
           firstyear = min(cft_output_period),
           nyear = max(cft_output_period) - min(cft_output_period) + 1,
-          ncell = cft_gridheader$header["ncell"],
+          ncell = cft_griddata$meta$ncell,
           nbands = length(cft_bands),
-          cellsize_lon = cft_gridheader$header["cellsize_lon"],
+          cellsize_lon = cft_griddata$meta$cellsize_lon,
           scalar = 1.0,
-          cellsize_lat = cft_gridheader$header["cellsize_lat"],
+          cellsize_lat = cft_griddata$meta$cellsize_lat,
           datatype = 3
         )
-        write_header(fert_noalloc_name, fert_noalloc_header)
+        lpjmlkit::write_header(fert_noalloc_name, fert_noalloc_header)
         fert_noalloc_fp <- file(fert_noalloc_name, "ab")
       }
     }
   }
   if (process_manure) {
-    if (!combine_fertilizer_manure) {
+    if (!LandInG_setup$fertilizer$combine_fertilizer_manure) {
       if (file.exists(manure_output_name)) {
         stop(
           paste(
@@ -2615,11 +2707,11 @@ if (cft_format == "NetCDF") {
         sep = ""
       )
       if (is.finite(manure_apply_threshold) &&
-        manure_apply_threshold_res == "target"
+          manure_apply_threshold_res == "target"
       ) {
         cat(
           "Applying upper application threshold of",
-          ud.convert(
+          units::ud_convert(
             manure_apply_threshold,
             manure_apply_threshold_unit,
             cft_output_unit
@@ -2627,35 +2719,39 @@ if (cft_format == "NetCDF") {
           cft_output_unit, "to manure.\n"
         )
       }
-      manure_output_header <- create_header(
+      manure_output_header <- lpjmlkit::create_header(
         name = "LPJMANU",
         version = 3,
         firstyear = min(cft_output_period),
         nyear = max(cft_output_period) - min(cft_output_period) + 1,
-        ncell = cft_gridheader$header["ncell"],
+        ncell = cft_griddata$meta$ncell,
         nbands = length(cft_bands),
-        cellsize_lon = cft_gridheader$header["cellsize_lon"],
+        cellsize_lon = cft_griddata$meta$cellsize_lon,
         scalar = 1.0,
-        cellsize_lat = cft_gridheader$header["cellsize_lat"],
+        cellsize_lat = cft_griddata$meta$cellsize_lat,
         datatype = 3
       )
-      write_header(manure_output_name, manure_output_header)
+      lpjmlkit::write_header(manure_output_name, manure_output_header)
       manure_output_fp <- file(manure_output_name, "ab")
     } else {
       cat(
         "Manure is combined with fertilizer application rates assuming",
         ifelse(
-          manure_availability_scalar > 1,
+          LandInG_setup$fertilizer$manure_availability_scalar > 1,
           "higher", # Does not really make sense.
-          ifelse(manure_availability_scalar < 1, "lower", "full")
+          ifelse(
+            LandInG_setup$fertilizer$manure_availability_scalar < 1,
+            "lower",
+            "full"
+          )
         ),
         "plant availability with manure_availability_scalar",
-        manure_availability_scalar, "\n"
+        LandInG_setup$fertilizer$manure_availability_scalar, "\n"
       )
     }
-      
+
     if (is.finite(manure_apply_threshold) ||
-      (!tmp_is_rate || (!is.null(tmp_ref_area) && tmp_ref_area == "grid"))
+        (!tmp_is_rate || (!is.null(tmp_ref_area) && tmp_ref_area == "grid"))
     ) {
       if (file.exists(manure_noalloc_name)) {
         stop(
@@ -2671,19 +2767,19 @@ if (cft_format == "NetCDF") {
         sQuote(manure_noalloc_name), "\n",
         sep = ""
       )
-      manure_noalloc_header <- create_header(
+      manure_noalloc_header <- lpjmlkit::create_header(
         name = "LPJMANU",
         version = 3,
         firstyear = min(cft_output_period),
         nyear = max(cft_output_period) - min(cft_output_period) + 1,
-        ncell = cft_gridheader$header["ncell"],
+        ncell = cft_griddata$meta$ncell,
         nbands = 1,
-        cellsize_lon = cft_gridheader$header["cellsize_lon"],
+        cellsize_lon = cft_griddata$meta$cellsize_lon,
         scalar = 1.0,
-        cellsize_lat = cft_gridheader$header["cellsize_lat"],
+        cellsize_lat = cft_griddata$meta$cellsize_lat,
         datatype = 3
       )
-      write_header(manure_noalloc_name, manure_noalloc_header)
+      lpjmlkit::write_header(manure_noalloc_name, manure_noalloc_header)
       manure_noalloc_fp <- file(manure_noalloc_name, "ab")
     }
     manure_noalloc_global <- array(
@@ -2701,7 +2797,6 @@ if (cft_format == "NetCDF") {
 
 ################################################################################
 ## Process years                                                              ##
-#stop("Before year loop")
 cat("*** Processing time series ***\n")
 for (year in seq(min(cft_output_period), max(cft_output_period))) {
   cat("***", year, "***\n")
@@ -2711,19 +2806,23 @@ for (year in seq(min(cft_output_period), max(cft_output_period))) {
     # datasets.
     fert_output_yeardata <- array(
       0,
-      dim = c(ncol(cft_raster), nrow(cft_raster), length(cft_bands)),
+      dim = c(
+        terra::ncol(cft_raster), terra::nrow(cft_raster), length(cft_bands)
+      ),
       dimnames = list(NULL, NULL, cft_bands)
     )
     fert_year_missing_src <- fert_year_missing_weight <- FALSE
     for (cft in cft_bands) {
-      cft_weight_sum <- array(0, dim = c(ncol(cft_raster), nrow(cft_raster)))
+      cft_weight_sum <- array(
+        0, dim = c(terra::ncol(cft_raster), terra::nrow(cft_raster))
+      )
       src_r <- which(fert_weighting_table$cft_band == cft &
-        !is.na(fert_weighting_table$weighting)
+          !is.na(fert_weighting_table$weighting)
       )
       for (src in src_r) {
         # Check if year is covered by src data
         tmp_nc <- fert_nc[[fert_weighting_table$fert[src]]]
-        tmp_unit <- ncatt_get(
+        tmp_unit <- ncdf4::ncatt_get(
           tmp_nc,
           paste0(fert_weighting_table$fert[src], cft_nut, "_timeseries"),
           "units"
@@ -2731,7 +2830,7 @@ for (year in seq(min(cft_output_period), max(cft_output_period))) {
         if (!tmp_unit$hasatt) {
           # Use fertilizer_pattern_unit defined in fertilizer_setup.R if NetCDF
           # does not have unit attribute.
-          tmp_unit$value <- fertilizer_pattern_unit
+          tmp_unit$value <- LandInG_setup$fertilizer$fertilizer_pattern_unit
         }
         src_years <- nc_file_years(tmp_nc)
         if (!year %in% src_years) {
@@ -2739,7 +2838,7 @@ for (year in seq(min(cft_output_period), max(cft_output_period))) {
             message(
               "Year ", year, " is missing in fertilizer source data.",
               ifelse(
-                extend_source_period == "zero",
+                LandInG_setup$fertilizer$extend_source_period == "zero",
                 " Setting fertilizer application rate to 0.",
                 " Using closest year available in source."
               )
@@ -2749,7 +2848,7 @@ for (year in seq(min(cft_output_period), max(cft_output_period))) {
             fert_year_missing_src <- TRUE
           }
           load_year <- switch(
-            extend_source_period,
+            LandInG_setup$fertilizer$extend_source_period,
             zero = NA,
             replicate = src_years[which.min(abs(src_years - year))]
           )
@@ -2757,34 +2856,38 @@ for (year in seq(min(cft_output_period), max(cft_output_period))) {
           load_year <- year
         }
         if (is.finite(load_year)) {
-          filedata <- ncvar_get(
+          filedata <- ncdf4::ncvar_get(
             tmp_nc,
             paste0(fert_weighting_table$fert[src], cft_nut, "_timeseries"),
             start = c(1, 1, which(src_years == load_year)),
             count = c(-1, -1, 1)
           )
           tmp_flip <- (tmp_nc$dim$lat$vals[1] < tmp_nc$dim$lat$vals[2]) !=
-            (yFromRow(cft_raster, 1) < yFromRow(cft_raster, 2))
+            (terra::yFromRow(cft_raster, 1) < terra::yFromRow(cft_raster, 2))
           if (tmp_flip) {
             filedata <- filedata[, seq(tmp_nc$dim$lat$len, 1)]
           }
           # Convert to output unit
-          filedata <- ud.convert(filedata, tmp_unit$value, cft_output_unit)
+          filedata <- filedata *
+            units::ud_convert(1, tmp_unit$value, cft_output_unit)
         } else {
           filedata <- array(0, dim = c(tmp_nc$dim$lon$len, tmp_nc$dim$lat$len))
           tmp_flip <- FALSE
         }
         # Crop to spatial extent of output raster
-        lon_index <- which(tmp_nc$dim$lon$vals > xmin(cft_raster) &
-          tmp_nc$dim$lon$vals < xmax(cft_raster)
+        lon_index <- which(
+          tmp_nc$dim$lon$vals > terra::xmin(cft_raster) &
+            tmp_nc$dim$lon$vals < terra::xmax(cft_raster)
         )
         if (tmp_flip) {
-          lat_index <- which(rev(tmp_nc$dim$lat$vals) > ymin(cft_raster) &
-            rev(tmp_nc$dim$lat$vals) < ymax(cft_raster)
+          lat_index <- which(
+            rev(tmp_nc$dim$lat$vals) > terra::ymin(cft_raster) &
+              rev(tmp_nc$dim$lat$vals) < terra::ymax(cft_raster)
           )
         } else {
-          lat_index <- which(tmp_nc$dim$lat$vals > ymin(cft_raster) &
-            tmp_nc$dim$lat$vals < ymax(cft_raster)
+          lat_index <- which(
+            tmp_nc$dim$lat$vals > terra::ymin(cft_raster) &
+              tmp_nc$dim$lat$vals < terra::ymax(cft_raster)
           )
         }
         filedata <- filedata[lon_index, lat_index, drop = FALSE]
@@ -2816,8 +2919,8 @@ for (year in seq(min(cft_output_period), max(cft_output_period))) {
                 "Year ", year, " is missing in harvested area data.",
                 " Using closest year available in source."
               )
-              # Show message only once, not for each crop (assuming that all crops
-              # cover the same period)
+              # Show message only once, not for each crop (assuming that all
+              # crops cover the same period)
               fert_year_missing_weight <- TRUE
             }
             load_year <- src_years[which.min(abs(src_years - year))]
@@ -2826,7 +2929,7 @@ for (year in seq(min(cft_output_period), max(cft_output_period))) {
           }
           if (mapping_irr_spec) {
             crop_index <- which(ha_weighting_crop_names ==
-              fert_weighting_table$weighting[src]
+                fert_weighting_table$weighting[src]
             )
           } else {
             crop_index <- which(ha_weighting_crop_names == sub(
@@ -2837,14 +2940,14 @@ for (year in seq(min(cft_output_period), max(cft_output_period))) {
             # Should normally work. Stop if not.
             stop("Unexpected error finding crop_index")
           }
-          tmp_unit <- ncatt_get(tmp_nc, tmp_varname, "units")
+          tmp_unit <- ncdf4::ncatt_get(tmp_nc, tmp_varname, "units")
           if (!tmp_unit$hasatt) {
             # Assume here that default unit for harvested area time series is ha
             tmp_unit$value <- "ha"
           }
           if (exists("weight_unit")) {
-            if (!ud.are.convertible(weight_unit, tmp_unit$value) ||
-              ud.convert(1, weight_unit, tmp_unit$value) != 1
+            if (!units::ud_are_convertible(weight_unit, tmp_unit$value) ||
+                units::ud_convert(1, weight_unit, tmp_unit$value) != 1
             ) {
               # weightdata for different src datasets has different units which
               # probably causes errors in weighted aggregation.
@@ -2861,24 +2964,21 @@ for (year in seq(min(cft_output_period), max(cft_output_period))) {
           } else {
             weight_unit <- tmp_unit$value
           }
-          weightdata <- ncvar_get(
+          weightdata <- ncdf4::ncvar_get(
             tmp_nc,
             tmp_varname,
             start = c(1, 1, crop_index, which(src_years == load_year)),
             count = c(-1, -1, 1, 1)
           )
           tmp_flip <- (tmp_nc$dim$lat$vals[1] < tmp_nc$dim$lat$vals[2]) !=
-            (yFromRow(cft_raster, 1) < yFromRow(cft_raster, 2))
+            (terra::yFromRow(cft_raster, 1) < terra::yFromRow(cft_raster, 2))
           if (tmp_flip) {
             weightdata <- weightdata[, seq(tmp_nc$dim$lat$len, 1)]
           }
           # Convert weight_unit to cft_output_area_unit if they are convertible
-          if (ud.are.convertible(weight_unit, cft_output_area_unit)) {
-            weightdata <- ud.convert(
-              weightdata,
-              weight_unit,
-              cft_output_area_unit
-            )
+          if (units::ud_are_convertible(weight_unit, cft_output_area_unit)) {
+            weightdata <- weightdata *
+              units::ud_convert(1, weight_unit, cft_output_area_unit)
           }
         } else if (cft %in% cft_bands[pasture_weighting_bands]) {
           if (!is.null(pasture_weighting_name)) {
@@ -2906,41 +3006,41 @@ for (year in seq(min(cft_output_period), max(cft_output_period))) {
               } else {
                 load_year <- year
               }
-              weightdata <- ncvar_get(
+              weightdata <- ncdf4::ncvar_get(
                 tmp_nc,
                 tmp_varname,
                 start = c(1, 1, which(src_years == load_year)),
                 count = c(-1, -1, 1)
               )
               tmp_flip <- (tmp_nc$dim$lat$vals[1] < tmp_nc$dim$lat$vals[2]) !=
-                (yFromRow(cft_raster, 1) < yFromRow(cft_raster, 2))
+                (terra::yFromRow(cft_raster, 1) < terra::yFromRow(cft_raster, 2))
               if (tmp_flip) {
                 weightdata <- weightdata[, seq(tmp_nc$dim$lat$len, 1)]
               }
               # Check if unit conversion is necessary
-              tmp_unit <- ncatt_get(tmp_nc, tmp_varname, "units")
+              tmp_unit <- ncdf4::ncatt_get(tmp_nc, tmp_varname, "units")
               if (!tmp_unit$hasatt) {
                 tmp_unit$value <- pasture_weighting_unit
               }
-              if (ud.are.convertible(tmp_unit$value, "1") ) {
+              if (units::ud_are_convertible(tmp_unit$value, "1")) {
                 # weightdata is fractional. Load area
                 if (!exists("pasture_weighting_area")) {
                   # Only load once, do not reload every year or for every
                   # pasture_weighting_nc. This requires that
                   # pasture_weighting_area is the same for all
-                  # pasture_weighting_nc. If they do differ, change code to 
+                  # pasture_weighting_nc. If they do differ, change code to
                   # reload pasture_weighting_area or save several versions of
                   # the variable.
                   tmp_x <- abs(tmp_nc$dim$lon$vals[1] - tmp_nc$dim$lon$vals[2])
                   tmp_y <- abs(tmp_nc$dim$lat$vals[1] - tmp_nc$dim$lat$vals[2])
-                  pasture_weighting_extent <- extent(
+                  pasture_weighting_extent <- terra::ext(
                     min(tmp_nc$dim$lon$vals) - tmp_x / 2,
                     max(tmp_nc$dim$lon$vals) + tmp_x / 2,
                     min(tmp_nc$dim$lat$vals) - tmp_y / 2,
                     max(tmp_nc$dim$lat$vals) + tmp_x / 2
                   )
-                  tmp_raster <- raster(
-                    pasture_weighting_extent,
+                  tmp_raster <- terra::rast(
+                    extent = pasture_weighting_extent,
                     resolution = c(tmp_x, tmp_y)
                   )
                   pasture_weighting_area <- load_hyde_area(
@@ -2948,40 +3048,41 @@ for (year in seq(min(cft_output_period), max(cft_output_period))) {
                     fileunits = pasture_weighting_area_file_unit,
                     return_units = cft_output_area_unit,
                     return_raster = tmp_raster,
+                    earth_radius = LandInG_setup$earthradius,
                     gextent = pasture_weighting_extent
                   )
                   pasture_weighting_area <- pasture_weighting_area$area
                   # Crop area to spatial extent
-                  pasture_weighting_area <- crop(
+                  pasture_weighting_area <- terra::crop(
                     pasture_weighting_area,
                     pasture_weighting_extent
                   )
-                  rm (tmp_raster, pasture_weighting_extent, tmp_x, tmp_y)
+                  rm(tmp_raster, pasture_weighting_extent, tmp_x, tmp_y)
                 }
-                if (ncell(pasture_weighting_area) != length(weightdata)) {
+                if (terra::ncell(pasture_weighting_area) != length(weightdata)) {
                   # Spatial resolution and extent should match at this point.
                   stop("Unexpected mismatch between weightdata and area data")
                 }
                 # Convert fractional unit into absolute unit
-                weightdata <- ud.convert(weightdata, tmp_unit$value, "1") *
-                  values(pasture_weighting_area)
+                weightdata <- weightdata *
+                  units::ud_convert(1, tmp_unit$value, "1") *
+                    ul(terra::values(pasture_weighting_area))
                 # Reset unit of weightdata
                 tmp_unit$value <- cft_output_area_unit
               }
               if (exists("weight_unit")) {
-                if (!ud.are.convertible(weight_unit, tmp_unit$value) ||
-                  ud.convert(1, weight_unit, tmp_unit$value) != 1
+                if (!units::ud_are_convertible(weight_unit, tmp_unit$value) ||
+                    units::ud_convert(1, weight_unit, tmp_unit$value) != 1
                 ) {
                   # weightdata for different src datasets has different units
                   # which probably causes errors in weighted aggregation.
                   stop(
-                    paste0(
-                      "Unit of weightdata for ",
-                      fert_weighting_table$weighting[src],
-                      " (", tmp_unit$value, ") differs from unit of other ",
-                      "weightdata (", weight_unit, "). Please ensure that all ",
-                      "weightdata has same unit for correct weighted aggregation."
-                    )
+                    "Unit of weightdata for ",
+                    fert_weighting_table$weighting[src],
+                    " (", tmp_unit$value, ") differs from unit of other ",
+                    "weightdata (", weight_unit, ").\n",
+                    "Please ensure that all weightdata has same unit for ",
+                    "correct weighted aggregation."
                   )
                 }
               } else {
@@ -3002,7 +3103,6 @@ for (year in seq(min(cft_output_period), max(cft_output_period))) {
               }
               weightdata <- array(0, dim = dim(filedata))
             }
-                
           } else {
             # Do not use weighted aggregation
             weightdata <- array(1, dim = dim(filedata))
@@ -3010,42 +3110,49 @@ for (year in seq(min(cft_output_period), max(cft_output_period))) {
         } else {
           # Fertilizer band with no corresponding weighting. Should not happen.
           stop(
-            paste0(
-              "No fertilizer weighting dataset set up for cft ", sQuote(cft),
-              ". Make sure that all cft_bands that are supposed to receive ",
-              "fertilizer are either included in ha_weighting_bands or ",
-              "pasture_weighting_bands. Or set up a new weighting dataset."
-            )
+            "No fertilizer weighting dataset set up for cft ", sQuote(cft),
+            ". Make sure that all cft_bands that are supposed to receive ",
+            "fertilizer are either included in ha_weighting_bands or ",
+            "pasture_weighting_bands. Or set up a new weighting dataset."
           )
         }
         if (any(dim(weightdata) != dim(filedata))) {
           # Crop to spatial extent of output raster
-          lon_index <- which(tmp_nc$dim$lon$vals > xmin(cft_raster) &
-          tmp_nc$dim$lon$vals < xmax(cft_raster)
+          lon_index <- which(
+            tmp_nc$dim$lon$vals > terra::xmin(cft_raster) &
+              tmp_nc$dim$lon$vals < terra::xmax(cft_raster)
           )
           if (tmp_flip) {
-            lat_index <- which(rev(tmp_nc$dim$lat$vals) > ymin(cft_raster) &
-            rev(tmp_nc$dim$lat$vals) < ymax(cft_raster)
+            lat_index <- which(
+              rev(tmp_nc$dim$lat$vals) > terra::ymin(cft_raster) &
+                rev(tmp_nc$dim$lat$vals) < terra::ymax(cft_raster)
             )
           } else {
-            lat_index <- which(tmp_nc$dim$lat$vals > ymin(cft_raster) &
-            tmp_nc$dim$lat$vals < ymax(cft_raster)
+            lat_index <- which(
+              tmp_nc$dim$lat$vals > terra::ymin(cft_raster) &
+                tmp_nc$dim$lat$vals < terra::ymax(cft_raster)
             )
           }
           weightdata <- weightdata[lon_index, lat_index, drop = FALSE]
           rm(lon_index, lat_index)
+          if (!any(weightdata > 0, na.rm = TRUE)) {
+            # No need to do any weighting, jump to next src
+            next
+          }
           # Compare resolution, aggregate weightdata if necessary
           weight2data <- round(dim(weightdata) / dim(filedata), 4)
           if (any(weight2data > 1)) {
             tmp_sum <- sum(weightdata, na.rm = TRUE)
             weightdata <- aggregate_array(weightdata, weight2data, "sum", FALSE)
             # Confirm that aggregation has not changed global sum.
-            if (abs(sum(weightdata, na.rm = TRUE) / tmp_sum - 1) > 1e-14) {
+            if (
+              (tmp_sum > 0 && abs(sum(weightdata, na.rm = TRUE) / tmp_sum - 1) >
+                1e-14
+              ) || (tmp_sum == 0 && sum(weightdata, na.rm = TRUE) != 0)
+            ) {
               stop(
-                paste(
-                  "Error aggregating weightdata for",
-                  fert_weighting_table$weighting[src]
-                )
+                "Error aggregating weightdata for ",
+                fert_weighting_table$weighting[src]
               )
             }
             rm(tmp_sum)
@@ -3055,10 +3162,8 @@ for (year in seq(min(cft_output_period), max(cft_output_period))) {
           # At this point, weightdata should be harmonized with filedata in
           # terms of resolution and spatial extent. Stop if not.
           stop(
-            paste(
-              "Unexpected mismatch between filedata and weightdata for",
-              "fertilizer", fert_weighting_table$fert[src]
-            )
+            "Unexpected mismatch between filedata and weightdata for ",
+            "fertilizer ", fert_weighting_table$fert[src]
           )
         }
         # Set missing values to zero in weightdata
@@ -3082,19 +3187,15 @@ for (year in seq(min(cft_output_period), max(cft_output_period))) {
           weightdata <- aggregate_array(weightdata, file2output, "sum", FALSE)
           if (abs(sum(filedata) / tmp_sum - 1) > 1e-14) {
             stop(
-              paste(
-                "Error aggregating source data for",
-                fert_weighting_table$fert[src],
-                "to output resolution."
-              )
+              "Error aggregating source data for ",
+              fert_weighting_table$fert[src],
+              " to output resolution."
             )
           }
           if (abs(sum(weightdata) / tmp_sum2 - 1) > 1e-14) {
             stop(
-              paste(
-                "Error aggregating weightdata for",
-                fert_weighting_table$weighting[src]
-              )
+              "Error aggregating weightdata for ",
+              fert_weighting_table$weighting[src]
             )
           }
           rm(tmp_sum, tmp_sum2)
@@ -3112,10 +3213,8 @@ for (year in seq(min(cft_output_period), max(cft_output_period))) {
         }
         if (anyNA(cft_weight_sum) || anyNA(fert_output_yeardata[, , cft])) {
           stop(
-            paste(
-              "Unexpected missing values while calculating crop",
-              fert_weighting_table$weighting[src]
-            )
+            "Unexpected missing values while calculating crop ",
+            fert_weighting_table$weighting[src]
           )
         }
         rm(filedata, weightdata)
@@ -3148,15 +3247,19 @@ for (year in seq(min(cft_output_period), max(cft_output_period))) {
     # datasets.
     manure_output_yeardata <- array(
       0,
-      dim = c(ncol(cft_raster), nrow(cft_raster), length(cft_bands)),
+      dim = c(
+        terra::ncol(cft_raster), terra::nrow(cft_raster), length(cft_bands)
+      ),
       dimnames = list(NULL, NULL, cft_bands)
     )
-    if (manure_noalloc_account && (is.finite(manure_apply_threshold) ||
-      (!tmp_is_rate || (!is.null(tmp_ref_area) && tmp_ref_area == "grid")))
+    if (manure_noalloc_account &&
+        (is.finite(manure_apply_threshold) ||
+            (!tmp_is_rate || (!is.null(tmp_ref_area) && tmp_ref_area == "grid"))
+        )
     ) {
       manure_noalloc_yeardata <- array(
         0,
-        dim = c(ncol(cft_raster), nrow(cft_raster))
+        dim = c(terra::ncol(cft_raster), terra::nrow(cft_raster))
       )
     }
     manure_year_missing_src <- manure_year_missing_weight <- FALSE
@@ -3175,7 +3278,7 @@ for (year in seq(min(cft_output_period), max(cft_output_period))) {
         message(
           "Year ", year, " is missing in manure source data. ",
           ifelse(
-            extend_source_period == "zero",
+            LandInG_setup$fertilizer$extend_source_period == "zero",
             "Setting manure application rate to 0.",
             "Using closest year available in source."
           )
@@ -3184,7 +3287,7 @@ for (year in seq(min(cft_output_period), max(cft_output_period))) {
         manure_year_missing_src <- TRUE
       }
       load_year <- switch(
-        extend_source_period,
+        LandInG_setup$fertilizer$extend_source_period,
         zero = NA,
         replicate = src_years[which.min(abs(src_years - year))]
       )
@@ -3192,33 +3295,35 @@ for (year in seq(min(cft_output_period), max(cft_output_period))) {
       load_year <- year
     }
     if (is.finite(load_year) && any(cft_bands_get_manure)) {
-      tmp_unit <- ncatt_get(tmp_nc, paste0("manure_", cft_nut, "_rate"), "units")
-      filedata <- ncvar_get(
+      tmp_unit <-
+        ncdf4::ncatt_get(tmp_nc, paste0("manure_", cft_nut, "_rate"), "units")
+      filedata <- ncdf4::ncvar_get(
         tmp_nc,
         paste0("manure_", cft_nut, "_rate"),
         start = c(1, 1, which(src_years == load_year)),
         count = c(-1, -1, 1)
       )
       tmp_flip <- (tmp_nc$dim$lat$vals[1] < tmp_nc$dim$lat$vals[2]) !=
-        (yFromRow(cft_raster, 1) < yFromRow(cft_raster, 2))
+        (terra::yFromRow(cft_raster, 1) < terra::yFromRow(cft_raster, 2))
       if (tmp_flip) {
         filedata <- filedata[, seq(tmp_nc$dim$lat$len, 1)]
       }
       # Convert to output unit
-      filedata <- ud.convert(filedata, tmp_unit$value, cft_output_unit)
-      
+      filedata <- filedata *
+        units::ud_convert(1, tmp_unit$value, cft_output_unit)
+
       # Manure not allocated
       if (exists("manure_noalloc_yeardata")) {
         tmp_varname <- paste0("manure_", cft_nut, "_noalloc")
         # Only look in same NetCDF file as manure application rate and assume
         # same variable dimensions.
         if (tmp_varname %in% names(tmp_nc$var)) {
-          tmp_unit <- ncatt_get(tmp_nc, tmp_varname, "units")
+          tmp_unit <- ncdf4::ncatt_get(tmp_nc, tmp_varname, "units")
           if (!tmp_unit$hasatt) {
             # Assume mass component of default manure_rate_unit
             tmp_unit$value <- manure_apply_threshold_mass_unit
           }
-          filedata_noalloc <- ncvar_get(
+          filedata_noalloc <- ncdf4::ncvar_get(
             tmp_nc,
             tmp_varname,
             start = c(1, 1, which(src_years == load_year)),
@@ -3228,11 +3333,8 @@ for (year in seq(min(cft_output_period), max(cft_output_period))) {
             filedata_noalloc <- filedata_noalloc[, seq(tmp_nc$dim$lat$len, 1)]
           }
           # Convert to output unit
-          filedata_noalloc <- ud.convert(
-            filedata_noalloc,
-            tmp_unit$value,
-            cft_output_mass_unit
-          )
+          filedata_noalloc <- filedata_noalloc *
+            units::ud_convert(1, tmp_unit$value, cft_output_mass_unit)
         } else {
           filedata_noalloc <- array(
             0,
@@ -3251,16 +3353,19 @@ for (year in seq(min(cft_output_period), max(cft_output_period))) {
       }
     }
     # Crop to spatial extent of output raster
-    lon_index <- which(tmp_nc$dim$lon$vals > xmin(cft_raster) &
-      tmp_nc$dim$lon$vals < xmax(cft_raster)
+    lon_index <- which(
+      tmp_nc$dim$lon$vals > terra::xmin(cft_raster) &
+        tmp_nc$dim$lon$vals < terra::xmax(cft_raster)
     )
     if (tmp_flip) {
-      lat_index <- which(rev(tmp_nc$dim$lat$vals) > ymin(cft_raster) &
-        rev(tmp_nc$dim$lat$vals) < ymax(cft_raster)
+      lat_index <- which(
+        rev(tmp_nc$dim$lat$vals) > terra::ymin(cft_raster) &
+          rev(tmp_nc$dim$lat$vals) < terra::ymax(cft_raster)
       )
     } else {
-      lat_index <- which(tmp_nc$dim$lat$vals > ymin(cft_raster) &
-        tmp_nc$dim$lat$vals < ymax(cft_raster)
+      lat_index <- which(
+        tmp_nc$dim$lat$vals > terra::ymin(cft_raster) &
+          tmp_nc$dim$lat$vals < terra::ymax(cft_raster)
       )
     }
     filedata <- filedata[lon_index, lat_index, drop = FALSE]
@@ -3270,7 +3375,10 @@ for (year in seq(min(cft_output_period), max(cft_output_period))) {
       tmp_sum <- sum(filedata_noalloc)
       manure_noalloc_global[as.character(year), "preprocessing"] <- tmp_sum
       # Aggregate data to output resolution if necessary
-      file2output <- round(dim(filedata_noalloc) / dim(cft_raster)[c(2, 1)], 4)
+      file2output <- round(
+        dim(filedata_noalloc) / dim(cft_raster)[c(2, 1)],
+        4
+      )
       if (any(file2output > 1)) {
         # Aggregate to output resolution. This is absolute amount and needs no
         # weighting.
@@ -3300,7 +3408,7 @@ for (year in seq(min(cft_output_period), max(cft_output_period))) {
     if (any(filedata > 0, na.rm = TRUE)) {
       # Weighting
       for (manure_weighting_opt in manure_weighting_options) {
-        if ( is.null(manure_weighting_nc[[manure_weighting_opt]])) {
+        if (is.null(manure_weighting_nc[[manure_weighting_opt]])) {
           tmp_nc <- manure_weighting_nc[[1]]
         } else {
           tmp_nc <- manure_weighting_nc[[manure_weighting_opt]]
@@ -3315,21 +3423,19 @@ for (year in seq(min(cft_output_period), max(cft_output_period))) {
           # Unnamed manure_weighting_opt, assume all bands that receive
           # manure
           (manure_weighting_opt == "dummy" && any(cft_bands_get_manure)) ||
-          # Named manure_weighting_opt, search for manure_weighting_opt in
-          # cft_bands -> this assumes that manure_weighting_options are
-          # "rainfed" and "irrigated", also used in cft_bands.
-          any(grepl(manure_weighting_opt, cft_bands[cft_bands_get_manure]))
+            # Named manure_weighting_opt, search for manure_weighting_opt in
+            # cft_bands -> this assumes that manure_weighting_options are
+            # "rainfed" and "irrigated", also used in cft_bands.
+            any(grepl(manure_weighting_opt, cft_bands[cft_bands_get_manure]))
         ) {
           if (!tmp_varname %in% names(tmp_nc$var)) {
             stop(
-              paste(
-                "Unexpected error: manure weighting variable",
-                sQuote(tmp_varname), "not found in manure weighting file",
-                sQuote(tmp_nc$filename)
-              )
+              "Unexpected error: manure weighting variable ",
+              sQuote(tmp_varname), " not found in manure weighting file ",
+              sQuote(tmp_nc$filename)
             )
           }
-          tmp_unit <- ncatt_get(tmp_nc, tmp_varname, "units")
+          tmp_unit <- ncdf4::ncatt_get(tmp_nc, tmp_varname, "units")
           if (!tmp_unit$hasatt)
             tmp_unit$value <- pasture_weighting_unit
           src_years <- nc_file_years(tmp_nc)
@@ -3346,18 +3452,18 @@ for (year in seq(min(cft_output_period), max(cft_output_period))) {
           } else {
             load_year <- year
           }
-          weightdata <- ncvar_get(
+          weightdata <- ncdf4::ncvar_get(
             tmp_nc,
             tmp_varname,
             start = c(1, 1, which(src_years == load_year)),
             count = c(-1, -1, 1)
           )
           tmp_flip <- (tmp_nc$dim$lat$vals[1] < tmp_nc$dim$lat$vals[2]) !=
-            (yFromRow(cft_raster, 1) < yFromRow(cft_raster, 2))
+            (terra::yFromRow(cft_raster, 1) < terra::yFromRow(cft_raster, 2))
           if (tmp_flip) {
             weightdata <- weightdata[, seq(tmp_nc$dim$lat$len, 1)]
           }
-          if (ud.are.convertible(tmp_unit$value, "1") ) {
+          if (units::ud_are_convertible(tmp_unit$value, "1")) {
             # weightdata is fractional. Load area
             if (!exists("manure_weighting_area")) {
               # Only load once, do not reload every year or for every
@@ -3367,14 +3473,14 @@ for (year in seq(min(cft_output_period), max(cft_output_period))) {
               # of the variable.
               tmp_x <- abs(tmp_nc$dim$lon$vals[1] - tmp_nc$dim$lon$vals[2])
               tmp_y <- abs(tmp_nc$dim$lat$vals[1] - tmp_nc$dim$lat$vals[2])
-              manure_weighting_extent <- extent(
+              manure_weighting_extent <- terra::ext(
                 min(tmp_nc$dim$lon$vals) - tmp_x / 2,
                 max(tmp_nc$dim$lon$vals) + tmp_x / 2,
                 min(tmp_nc$dim$lat$vals) - tmp_y / 2,
                 max(tmp_nc$dim$lat$vals) + tmp_x / 2
               )
-              tmp_raster <- raster(
-                manure_weighting_extent,
+              tmp_raster <- terra::rast(
+                extent = manure_weighting_extent,
                 resolution = c(tmp_x, tmp_y)
               )
               manure_weighting_area <- load_hyde_area(
@@ -3382,45 +3488,47 @@ for (year in seq(min(cft_output_period), max(cft_output_period))) {
                 fileunits = manure_weighting_area_file_unit,
                 return_units = cft_output_area_unit,
                 return_raster = tmp_raster,
+                earth_radius = LandInG_setup$earthradius,
                 gextent = manure_weighting_extent
               )
               manure_weighting_area <- manure_weighting_area$area
               # Crop area to spatial extent
-              manure_weighting_area <- crop(
+              manure_weighting_area <- terra::crop(
                 manure_weighting_area,
                 manure_weighting_extent
               )
-              rm (tmp_raster, manure_weighting_extent, tmp_x, tmp_y)
+              rm(tmp_raster, manure_weighting_extent, tmp_x, tmp_y)
             }
-            if (ncell(manure_weighting_area) != length(weightdata)) {
+            if (terra::ncell(manure_weighting_area) != length(weightdata)) {
               # Spatial resolution and extent should match at this point.
               stop("Unexpected mismatch between weightdata and area data")
             }
             # Convert fractional unit into absolute unit
-            weightdata <- ud.convert(weightdata, tmp_unit$value, "1") *
-              values(manure_weighting_area)
-              # Reset unit of weightdata
-              tmp_unit$value <- cft_output_area_unit
+            weightdata <- weightdata *
+              units::ud_convert(1, tmp_unit$value, "1") *
+               ul(terra::values(manure_weighting_area))
+            # Reset unit of weightdata
+            tmp_unit$value <- cft_output_area_unit
           } else {
             # Convert to cft_output_area_unit directly
-            weightdata <- ud.convert(
-              weightdata,
-              tmp_unit$value,
-              cft_output_area_unit
-            )
+            weightdata <- weightdata *
+              units::ud_convert(1, tmp_unit$value, cft_output_area_unit)
           }
           if (any(dim(weightdata) != dim(filedata))) {
             # Crop to spatial extent of output raster
-            lon_index <- which(tmp_nc$dim$lon$vals > xmin(cft_raster) &
-              tmp_nc$dim$lon$vals < xmax(cft_raster)
+            lon_index <- which(
+              tmp_nc$dim$lon$vals > terra::xmin(cft_raster) &
+                tmp_nc$dim$lon$vals < terra::xmax(cft_raster)
             )
             if (tmp_flip) {
-              lat_index <- which(rev(tmp_nc$dim$lat$vals) > ymin(cft_raster) &
-              rev(tmp_nc$dim$lat$vals) < ymax(cft_raster)
+              lat_index <- which(
+                rev(tmp_nc$dim$lat$vals) > terra::ymin(cft_raster) &
+                  rev(tmp_nc$dim$lat$vals) < terra::ymax(cft_raster)
               )
             } else {
-              lat_index <- which(tmp_nc$dim$lat$vals > ymin(cft_raster) &
-              tmp_nc$dim$lat$vals < ymax(cft_raster)
+              lat_index <- which(
+                tmp_nc$dim$lat$vals > terra::ymin(cft_raster) &
+                  tmp_nc$dim$lat$vals < terra::ymax(cft_raster)
               )
             }
             weightdata <- weightdata[lon_index, lat_index, drop = FALSE]
@@ -3451,12 +3559,10 @@ for (year in seq(min(cft_output_period), max(cft_output_period))) {
             # At this point, weightdata should be harmonized with filedata in
             # terms of resolution and spatial extent. Stop if not.
             stop(
-              paste(
-                "Unexpected mismatch between filedata and weightdata for",
-                "manure and",
-                ifelse(manure_weighting_opt != "dummy", manure_weighting_opt, ""),
-                "manure weighting data"
-              )
+              "Unexpected mismatch between filedata and weightdata for ",
+              "manure and ",
+              ifelse(manure_weighting_opt != "dummy", manure_weighting_opt, ""),
+              " manure weighting data"
             )
           }
           # Set missing values to zero in weightdata
@@ -3467,7 +3573,10 @@ for (year in seq(min(cft_output_period), max(cft_output_period))) {
           # be reused with different weighting option.
           # filedata <- pmax(filedata, 0, na.rm = TRUE)
           # Aggregate data to output resolution if necessary
-          file2output <- round(dim(filedata) / dim(cft_raster)[c(2, 1)], 4)
+          file2output <- round(
+            dim(filedata) / dim(cft_raster)[c(2, 1)],
+            4
+          )
           if (any(file2output > 1)) {
             tmp_sum <- sum(filedata * weightdata, na.rm = TRUE)
             tmp_sum2 <- sum(weightdata)
@@ -3481,28 +3590,24 @@ for (year in seq(min(cft_output_period), max(cft_output_period))) {
             weightdata <- aggregate_array(weightdata, file2output, "sum", FALSE)
             if (abs(sum(filedata_weighted, na.rm = TRUE) / tmp_sum - 1) > 1e-14) {
               stop(
-                paste(
-                  "Error aggregating source data for",
-                  ifelse(
-                    manure_weighting_opt != "dummy",
-                    paste(manure_weighting_opt, "manure"),
-                    ""
-                  ),
-                  "to output resolution."
-                )
+                "Error aggregating source data for ",
+                ifelse(
+                  manure_weighting_opt != "dummy",
+                  paste(manure_weighting_opt, "manure"),
+                  ""
+                ),
+                " to output resolution."
               )
             }
             if (abs(sum(weightdata) / tmp_sum2 - 1) > 1e-14) {
               stop(
-                paste(
-                  "Error aggregating weightdata for",
-                  ifelse(
-                    manure_weighting_opt != "dummy",
-                    paste(manure_weighting_opt, "manure"),
-                    ""
-                  ),
-                  "to output resolution."
-                )
+                "Error aggregating weightdata for ",
+                ifelse(
+                  manure_weighting_opt != "dummy",
+                  paste(manure_weighting_opt, "manure"),
+                  ""
+                ),
+                " to output resolution."
               )
             }
             rm(tmp_sum, tmp_sum2)
@@ -3515,11 +3620,15 @@ for (year in seq(min(cft_output_period), max(cft_output_period))) {
           }
           # Set missing values in filedata_weighted to 0
           filedata_weighted <- pmax(filedata_weighted, 0, na.rm = TRUE)
-          if (length(filedata_weighted) != prod(dim(manure_output_yeardata)[-3])) {
-            stop("Unexpected mismatch between filedata and manure_output_yeardata")
+          if (length(filedata_weighted) !=
+              prod(dim(manure_output_yeardata)[-3])
+          ) {
+            stop(
+              "Unexpected mismatch between filedata and manure_output_yeardata"
+            )
           }
           # Apply manure_apply_threshold if necessary
-          # General note on accounting of manure not allocated: 
+          # General note on accounting of manure not allocated:
           # (1) The code below assumes that weighting datasets used for manure
           # weighting sum up to the total cropland area upon which manure is
           # applied.
@@ -3530,9 +3639,9 @@ for (year in seq(min(cft_output_period), max(cft_output_period))) {
           # cft_bands. The latter may not be true unless fallow bands are added
           # to the dataset.
           if (is.finite(manure_apply_threshold) &&
-            manure_apply_threshold_res == "target"
+              manure_apply_threshold_res == "target"
           ) {
-            tmp_threshold <- ud.convert(
+            tmp_threshold <- units::ud_convert(
               manure_apply_threshold,
               manure_apply_threshold_unit,
               cft_output_unit
@@ -3571,7 +3680,7 @@ for (year in seq(min(cft_output_period), max(cft_output_period))) {
             # fallow land is not included in manure_output_yeardata but is
             # included in manure_noalloc_global[, "applied"]. Because of that,
             # global sums of manure_output_yeardata will be inconsistent with
-            # global data in manure_noalloc_global[, "applied"]. 
+            # global data in manure_noalloc_global[, "applied"].
             manure_noalloc_global[as.character(year), "applied"] <-
               manure_noalloc_global[as.character(year), "applied"] +
               sum(filedata_weighted * weightdata)
@@ -3583,7 +3692,6 @@ for (year in seq(min(cft_output_period), max(cft_output_period))) {
     rm(filedata)
   } # end process_manure
   gc()
-  
 
   # Write data to file(s)
   max_table <- array(
@@ -3591,16 +3699,19 @@ for (year in seq(min(cft_output_period), max(cft_output_period))) {
     dimnames = list(cft_bands, NULL)
   )
   if (process_fertilizer) {
-    if (process_manure && combine_fertilizer_manure) {
+    if (process_manure && LandInG_setup$fertilizer$combine_fertilizer_manure) {
       # Combine fertilizer and manure using manure_availability_scalar
       fert_output_yeardata <- fert_output_yeardata + manure_output_yeardata *
-        manure_availability_scalar
+        LandInG_setup$fertilizer$manure_availability_scalar
       rm(manure_output_yeardata)
       gc(full = FALSE)
     }
-  } else if (process_manure && combine_fertilizer_manure) {
+  } else if (process_manure &&
+      LandInG_setup$fertilizer$combine_fertilizer_manure
+  ) {
     # Write manure to fertilizer file using manure_availability_scalar
-    fert_output_yeardata <-  manure_output_yeardata * manure_availability_scalar
+    fert_output_yeardata <- manure_output_yeardata *
+      LandInG_setup$fertilizer$manure_availability_scalar
     rm(manure_output_yeardata)
     gc(full = FALSE)
   }
@@ -3610,7 +3721,7 @@ for (year in seq(min(cft_output_period), max(cft_output_period))) {
       max_table <- cbind(max_table, fert_max)
       rm(fert_max)
       colnames(max_table)[ncol(max_table)] <- fert_output_var$name
-      ncvar_put(
+      ncdf4::ncvar_put(
         nc = fert_output_nc,
         varid = fert_output_var$name,
         vals = c(fert_output_yeardata),
@@ -3618,11 +3729,11 @@ for (year in seq(min(cft_output_period), max(cft_output_period))) {
         count = c(-1, -1, -1, 1)
       )
       # Make sure all data is actually written to file.
-      nc_sync(fert_output_nc)
+      ncdf4::nc_sync(fert_output_nc)
       rm(fert_output_yeardata)
       gc(full = FALSE)
       if (exists("fert_noalloc_yeardata")) {
-        ncvar_put(
+        ncdf4::ncvar_put(
           nc = fert_output_nc,
           varid = fert_noalloc_var$name,
           vals = c(fert_noalloc_yeardata),
@@ -3630,17 +3741,18 @@ for (year in seq(min(cft_output_period), max(cft_output_period))) {
           count = c(-1, -1, -1, 1)
         )
         # Make sure all data is actually written to file.
-        nc_sync(fert_output_nc)
+        ncdf4::nc_sync(fert_output_nc)
         rm(fert_noalloc_yeardata)
         gc(full = FALSE)
       }
     } else {
       # Extract data for cells included in cft_griddata
-      dim(fert_output_yeardata) <- c(ncell(cft_raster), length(cft_bands))
+      dim(fert_output_yeardata) <- c(terra::ncell(cft_raster), length(cft_bands))
       fert_output_yeardata <-
         fert_output_yeardata[cft_raster_gridindex, , drop = FALSE]
       if (exists("fert_noalloc_yeardata")) {
-        dim(fert_noalloc_yeardata) <- c(ncell(cft_raster), length(cft_bands))
+        dim(fert_noalloc_yeardata) <-
+          c(terra::ncell(cft_raster), length(cft_bands))
         fert_noalloc_yeardata <-
           fert_noalloc_yeardata[cft_raster_gridindex, , drop = FALSE]
       }
@@ -3653,26 +3765,26 @@ for (year in seq(min(cft_output_period), max(cft_output_period))) {
       if (fert_output_header$header["order"] == 1) {
         fert_output_yeardata <- t(fert_output_yeardata)
       }
-      if (typeof(get_datatype(fert_output_header)$type) == "double") {
+      if (typeof(lpjmlkit::get_datatype(fert_output_header)$type) == "double") {
         tmpdata <- c(fert_output_yeardata / fert_output_header$header["scalar"])
-      } else if (typeof(get_datatype(fert_output_header)$type) == "integer") {
+      } else if (typeof(lpjmlkit::get_datatype(fert_output_header)$type) ==
+          "integer"
+      ) {
         tmpdata <- as.integer(
           round(fert_output_yeardata / fert_output_header$header["scalar"])
         )
       } else {
         stop(
-          paste(
-            "Unexpected datatype",
-            sQuote(typeof(get_datatype(fert_output_header)$type)),
-            "in fert_output_header. Set datatype to one of the integer of",
-            "floating point data types."
-          )
+          "Unexpected datatype ",
+          sQuote(typeof(lpjmlkit::get_datatype(fert_output_header)$type)),
+          " in fert_output_header. Set datatype to one of the integer or",
+          " floating point data types."
         )
       }
       rm(fert_output_yeardata)
       writeBin(
         tmpdata, fert_output_fp,
-        size = get_datatype(fert_output_header)$size,
+        size = lpjmlkit::get_datatype(fert_output_header)$size,
         endian = fert_output_header$endian
       )
       rm(tmpdata)
@@ -3681,27 +3793,29 @@ for (year in seq(min(cft_output_period), max(cft_output_period))) {
         if (fert_noalloc_header$header["order"] == 1) {
           fert_noalloc_yeardata <- t(fert_noalloc_yeardata)
         }
-        if (typeof(get_datatype(fert_noalloc_header)$type) == "double") {
+        if (typeof(lpjmlkit::get_datatype(fert_noalloc_header)$type) ==
+            "double"
+        ) {
           tmpdata <-
             c(fert_noalloc_yeardata / fert_noalloc_header$header["scalar"])
-        } else if (typeof(get_datatype(fert_noalloc_header)$type) == "integer") {
+        } else if (typeof(lpjmlkit::get_datatype(fert_noalloc_header)$type) ==
+            "integer"
+        ) {
           tmpdata <- as.integer(
             round(fert_noalloc_yeardata / fert_noalloc_header$header["scalar"])
           )
         } else {
           stop(
-            paste(
-              "Unexpected datatype",
-              sQuote(typeof(get_datatype(fert_noalloc_header)$type)),
-              "in fert_noalloc_header. Set datatype to one of the integer of",
-              "floating point data types."
-            )
+            "Unexpected datatype ",
+            sQuote(typeof(lpjmlkit::get_datatype(fert_noalloc_header)$type)),
+            " in fert_noalloc_header. Set datatype to one of the integer or",
+            " floating point data types."
           )
         }
         rm(fert_noalloc_yeardata)
         writeBin(
           tmpdata, fert_noalloc_fp,
-          size = get_datatype(fert_noalloc_header)$size,
+          size = lpjmlkit::get_datatype(fert_noalloc_header)$size,
           endian = fert_noalloc_header$endian
         )
         rm(tmpdata)
@@ -3715,7 +3829,7 @@ for (year in seq(min(cft_output_period), max(cft_output_period))) {
       max_table <- cbind(max_table, manure_max)
       rm(manure_max)
       colnames(max_table)[ncol(max_table)] <- manure_output_var$name
-      ncvar_put(
+      ncdf4::ncvar_put(
         nc = manure_output_nc,
         varid = manure_output_var$name,
         vals = c(manure_output_yeardata),
@@ -3723,12 +3837,13 @@ for (year in seq(min(cft_output_period), max(cft_output_period))) {
         count = c(-1, -1, -1, 1)
       )
       # Make sure all data is actually written to file.
-      nc_sync(manure_output_nc)
+      ncdf4::nc_sync(manure_output_nc)
       rm(manure_output_yeardata)
       gc(full = FALSE)
     } else {
       # Extract data for cells included in cft_griddata
-      dim(manure_output_yeardata) <- c(ncell(cft_raster), length(cft_bands))
+      dim(manure_output_yeardata) <-
+        c(terra::ncell(cft_raster), length(cft_bands))
       manure_output_yeardata <-
         manure_output_yeardata[cft_raster_gridindex, , drop = FALSE]
       # Prepare data for writing
@@ -3739,27 +3854,29 @@ for (year in seq(min(cft_output_period), max(cft_output_period))) {
       if (manure_output_header$header["order"] == 1) {
         manure_output_yeardata <- t(manure_output_yeardata)
       }
-      if (typeof(get_datatype(manure_output_header)$type) == "double") {
+      if (typeof(lpjmlkit::get_datatype(manure_output_header)$type) ==
+          "double"
+      ) {
         tmpdata <-
           c(manure_output_yeardata / manure_output_header$header["scalar"])
-      } else if (typeof(get_datatype(manure_output_header)$type) == "integer") {
+      } else if (typeof(lpjmlkit::get_datatype(manure_output_header)$type) ==
+          "integer"
+      ) {
         tmpdata <- as.integer(
           round(manure_output_yeardata / manure_output_header$header["scalar"])
         )
       } else {
         stop(
-          paste(
-            "Unexpected datatype",
-            sQuote(typeof(get_datatype(fert_output_header)$type)),
-            "in manure_output_header. Set datatype to one of the integer of",
-            "floating point data types."
-          )
+          "Unexpected datatype ",
+          sQuote(typeof(lpjmlkit::get_datatype(fert_output_header)$type)),
+          " in manure_output_header. Set datatype to one of the integer or",
+          " floating point data types."
         )
       }
       rm(manure_output_yeardata)
       writeBin(
         tmpdata, manure_output_fp,
-        size = get_datatype(manure_output_header)$size,
+        size = lpjmlkit::get_datatype(manure_output_header)$size,
         endian = manure_output_header$endian
       )
       rm(tmpdata)
@@ -3771,7 +3888,7 @@ for (year in seq(min(cft_output_period), max(cft_output_period))) {
       # Data is saved to fertilizer file if no separate manure file is created,
       # otherwise to manure file.
       if (exists("manure_output_var")) {
-        ncvar_put(
+        ncdf4::ncvar_put(
           nc = manure_output_nc,
           varid = manure_noalloc_var$name,
           vals = c(manure_noalloc_yeardata),
@@ -3779,9 +3896,9 @@ for (year in seq(min(cft_output_period), max(cft_output_period))) {
           count = c(-1, -1, 1)
         )
         # Make sure all data is actually written to file.
-        nc_sync(manure_output_nc)
+        ncdf4::nc_sync(manure_output_nc)
       } else {
-        ncvar_put(
+        ncdf4::ncvar_put(
           nc = fert_output_nc,
           varid = manure_noalloc_var$name,
           vals = c(manure_noalloc_yeardata),
@@ -3789,39 +3906,41 @@ for (year in seq(min(cft_output_period), max(cft_output_period))) {
           count = c(-1, -1, 1)
         )
         # Make sure all data is actually written to file.
-        nc_sync(fert_output_nc)
+        ncdf4::nc_sync(fert_output_nc)
       }
     } else {
       # Extract data for cells included in cft_griddata
       manure_noalloc_yeardata <- manure_noalloc_yeardata[cft_raster_gridindex]
       # Prepare data for writing
-      if (typeof(get_datatype(manure_noalloc_header)$type) == "double") {
+      if (typeof(lpjmlkit::get_datatype(manure_noalloc_header)$type) ==
+          "double"
+      ) {
         tmpdata <-
           c(manure_noalloc_yeardata / manure_noalloc_header$header["scalar"])
-      } else if (typeof(get_datatype(manure_noalloc_header)$type) == "integer") {
+      } else if (typeof(lpjmlkit::get_datatype(manure_noalloc_header)$type) ==
+          "integer"
+      ) {
         tmpdata <- as.integer(
           round(manure_noalloc_yeardata / manure_noalloc_header$header["scalar"])
         )
       } else {
         stop(
-          paste(
-            "Unexpected datatype",
-            sQuote(typeof(get_datatype(fert_output_header)$type)),
-            "in manure_noalloc_header. Set datatype to one of the integer of",
-            "floating point data types."
-          )
+          "Unexpected datatype",
+          sQuote(typeof(lpjmlkit::get_datatype(fert_output_header)$type)),
+          " in manure_noalloc_header. Set datatype to one of the integer or",
+          " floating point data types."
         )
       }
       writeBin(
         tmpdata, manure_noalloc_fp,
-        size = get_datatype(manure_noalloc_header)$size,
+        size = lpjmlkit::get_datatype(manure_noalloc_header)$size,
         endian = manure_noalloc_header$endian
       )
       rm(tmpdata)
     }
     rm(manure_noalloc_yeardata)
   }
-      
+
   colnames(max_table) <- paste0(
     "Max. ",
     sub("fert", "fertilizer", sub("manu", "manure", colnames(max_table))),
@@ -3872,11 +3991,11 @@ if (exists("manure_noalloc_global")) {
 if (cft_format == "NetCDF") {
   if (exists("fert_output_nc")) {
     cat(time_dim$len, "years saved to", fert_output_nc$filename, "\n")
-    nc_close(fert_output_nc)
+    ncdf4::nc_close(fert_output_nc)
   }
   if (exists("manure_output_nc")) {
     cat(time_dim$len, "years saved to", manure_output_nc$filename, "\n")
-    nc_close(manure_output_nc)
+    ncdf4::nc_close(manure_output_nc)
   }
 } else {
   if (exists("fert_output_fp")) {
@@ -3910,13 +4029,13 @@ if (cft_format == "NetCDF") {
 }
 # Close NetCDF files opened by this script
 if (exists("fert_nc") && length(fert_nc) > 0)
-  invisible(sapply(fert_nc, nc_close))
+  invisible(sapply(fert_nc, ncdf4::nc_close))
 if (exists("ha_weighting_nc") && length(ha_weighting_nc) > 0)
-  invisible(sapply(ha_weighting_nc, nc_close))
+  invisible(sapply(ha_weighting_nc, ncdf4::nc_close))
 if (exists("pasture_weighting_nc") && length(pasture_weighting_nc) > 0)
-  invisible(sapply(pasture_weighting_nc, nc_close))
+  invisible(sapply(pasture_weighting_nc, ncdf4::nc_close))
 if (exists("manure_nc") && length(manure_nc) > 0)
-  invisible(sapply(manure_nc, nc_close))
+  invisible(sapply(manure_nc, ncdf4::nc_close))
 if (exists("manure_weighting_nc") && length(manure_weighting_nc) > 0)
-  invisible(sapply(manure_weighting_nc, nc_close))
+  invisible(sapply(manure_weighting_nc, ncdf4::nc_close))
 ################################################################################

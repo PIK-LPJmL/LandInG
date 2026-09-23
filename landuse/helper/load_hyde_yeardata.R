@@ -39,8 +39,8 @@ load_hyde_yeardata <- function(year,
                                file_raster,
                                vars_req,
                                area_raster,
-                               target_unit = fao_area_units,
-                               target_raster = cft_raster,
+                               target_unit,
+                               target_raster,
                                target_varname,
                                fact,
                                enforce_grid_max = FALSE
@@ -58,7 +58,7 @@ load_hyde_yeardata <- function(year,
   file_yearindex <- which(years == year)
   # Check whether latitude dimension has correct orientation
   lats <- file_list[[file_index]]$dim$lat$vals
-  raster_lats <- yFromRow(file_raster)
+  raster_lats <- terra::yFromRow(file_raster)
   file_flip <- (lats[1] < lats[2]) != (raster_lats[1] < raster_lats[2])
   # Load data
   file_yeardata <- array(
@@ -70,7 +70,7 @@ load_hyde_yeardata <- function(year,
     dimnames = list(NULL, NULL, vars_req)
   )
   for (v in vars_req) {
-    file_yeardata[, , v] <- ncvar_get(
+    file_yeardata[, , v] <- ncdf4::ncvar_get(
       nc = file_list[[file_index]],
       varid = v,
       start = c(1, 1, file_yearindex),
@@ -89,7 +89,7 @@ load_hyde_yeardata <- function(year,
   # Convert source data to target_unit
   for (v in vars_req) {
     unit <- file_list[[file_index]]$var[[v]]$units
-    if (!ud.are.convertible(unit, "m2")) {
+    if (!units::ud_are_convertible(unit, "m2")) {
       # Source data has fractional unit, convert to absolute area using
       # area_raster
       cat(
@@ -97,33 +97,50 @@ load_hyde_yeardata <- function(year,
         sQuote(unit),
         "to", sQuote(target_unit), "\n"
       )
+      # Confirm correct unit of area_raster
+      if (
+        !units::ud_are_convertible(terra::units(area_raster), target_unit) ||
+          units::ud_convert(1, terra::units(area_raster), target_unit) != 1
+      ) {
+        stop(
+          "Unit of area_raster ", sQuote(terra::units(area_raster)),
+          " does not match target_unit ", sQuote(target_unit)
+        )
+      }
       file_yeardata[, , v] <- file_yeardata[, , v] *
-        ud.convert(1, unit, "1") * values(area_raster)
+        units::ud_convert(1, unit, "1") * ul(terra::values(area_raster))
     } else {
       # Source data has absolute unit, convert to target_unit
-      if (ud.convert(1,  unit, target_unit) != 1) {
+      if (units::ud_convert(1,  unit, target_unit) != 1) {
         cat(
           "Convert", sQuote(v), "in", sQuote(target_varname), "from",
           sQuote(unit),
           "to", sQuote(target_unit), "\n"
         )
         file_yeardata[, , v] <- file_yeardata[, , v] *
-          ud.convert(1, unit, target_unit)
+          units::ud_convert(1, unit, target_unit)
       }
     }
     # Check for any values exceeding values in area_raster (HYDE area > grid
     # cell area)
     if (enforce_grid_max) {
       if (
-        any(c(file_yeardata[, , v]) > (values(area_raster) * 1.0001),
+        any(c(file_yeardata[, , v]) > (terra::values(area_raster) * 1.0001),
             na.rm = TRUE)
       ) {
         warning(
           "Values in ",
-          length(which(c(file_yeardata[, , v]) > (values(area_raster) * 1.0001))),
+          length(
+            which(
+              c(file_yeardata[, , v]) > (terra::values(area_raster) * 1.0001)
+            )
+          ),
           " cell(s) of ", sQuote(v),
           " exceed grid cell area by up to ",
-          max(c(file_yeardata[, , v]) - values(area_raster), na.rm = TRUE),
+          max(
+            c(file_yeardata[, , v]) - terra::values(area_raster),
+            na.rm = TRUE
+          ),
           " ", target_unit, " during year ", year,
           ". Reducing to grid cell area.",
           immediate. = TRUE
@@ -131,16 +148,18 @@ load_hyde_yeardata <- function(year,
       }
       file_yeardata[, , v] <- pmin(
         file_yeardata[, , v],
-        matrix(values(area_raster), nrow = ncol(area_raster))
+        matrix(terra::values(area_raster), nrow = terra::ncol(area_raster))
       )
     }
   }
   # Crop to CFT spatial extent
-  crop_x <- which(xFromCol(file_raster) > xmin(target_raster) &
-    xFromCol(file_raster) < xmax(target_raster)
+  crop_x <- which(
+    terra::xFromCol(file_raster) > terra::xmin(target_raster) &
+      terra::xFromCol(file_raster) < terra::xmax(target_raster)
   )
-  crop_y <- which(yFromRow(file_raster) > ymin(target_raster) &
-    yFromRow(file_raster) < ymax(target_raster)
+  crop_y <- which(
+    terra::yFromRow(file_raster) > terra::ymin(target_raster) &
+      terra::yFromRow(file_raster) < terra::ymax(target_raster)
   )
   if (length(dim(file_yeardata)) == 2) {
     file_yeardata <- file_yeardata[crop_x, crop_y]
@@ -158,7 +177,7 @@ load_hyde_yeardata <- function(year,
   }
   if (any(dim(file_yeardata)[1:2] / fact != dim(target_raster)[2:1])) {
     stop(
-      "Mismatch between ", sQuote(varname), " from ",
+      "Mismatch between ", sQuote(target_varname), " from ",
       sQuote(file_list[[file_index]]$filename),
       " and target_raster."
     )
@@ -167,9 +186,9 @@ load_hyde_yeardata <- function(year,
   if (max(fact) > 1) {
     cat(
       "Aggregating ", sQuote(target_varname), " from [",
-      toString(round(res(file_raster), 8)),
+      toString(round(terra::res(file_raster), 8)),
       "] to output resolution [",
-      toString(round(res(target_raster), 8)),
+      toString(round(terra::res(target_raster), 8)),
       "]\n",
       sep = ""
     )
@@ -194,7 +213,10 @@ load_hyde_yeardata <- function(year,
     rm(tmpdata)
   }
   # Dissolve longitude and latitude dimension to use cft_raster_gridindex
-  indexed_dim <- c(prod(dim(file_yeardata)[1:2]), dim(file_yeardata)[-c(1:2)])
+  indexed_dim <- c(
+    prod(dim(file_yeardata)[c(1, 2)]),
+    dim(file_yeardata)[-c(1, 2)]
+  )
   indexed_dimnames <- dimnames(file_yeardata)[-1]
   dim(file_yeardata) <- indexed_dim
   dimnames(file_yeardata) <- indexed_dimnames

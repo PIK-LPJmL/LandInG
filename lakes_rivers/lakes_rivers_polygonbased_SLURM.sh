@@ -5,10 +5,10 @@
 #SBATCH --export=ALL
 #SBATCH --account=lpjml
 #SBATCH --comment="lakes and rivers"
-#SBATCH --output=lakes_rivers_polygonbased%j.out
-#SBATCH --error=lakes_rivers_polygonbased%j.err
-#SBATCH --mail-type=END
-#SBATCH --job-name=lakes_rivers_fraction
+#SBATCH --output=lakes_rivers_polygonbased_%j.out
+#SBATCH --error=lakes_rivers_polygonbased_%j.err
+#SBATCH --mail-type=END,FAIL
+#SBATCH --job-name=lakes_rivers_polygonbased
 
 ################################################################################
 ## Copyright (C) 2022 Potsdam Institute for Climate Impact Research (PIK),    ##
@@ -20,15 +20,9 @@
 ################################################################################
 
 ulimit -c unlimited
-export I_MPI_PMI_LIBRARY=/p/system/slurm/lib/libpmi.so
+if [ -d /p/system/lenovo/ctt ]; then
+  # Load modules for PIK 2024 high-performance computer
+  source ../R_env_PIK.sh
+fi
 
-module load R/3.6.2
-module load intel/2018.1
-module load geos/3.6.1
-module load udunits/2.2.28
-module load gdal/2.4.0
-module load proj4/5.2.0
-
-export R_LIBS=/p/projects/lpjml/R.3.6.2/library # Must match with R module selected above
-
-srun --propagate R --no-save --file=lakes_rivers_polygonbased.R --silent --slave
+mpirun Rscript --vanilla lakes_rivers_polygonbased.R

@@ -24,48 +24,52 @@ match_admin_to_data <- function(filedata,
                                 na.rm = TRUE,
                                 verbose = TRUE
                                ) {
-  if (!class(filedata) %in% c("RasterLayer", "RasterBrick")) {
+  if (!is(filedata, "SpatRaster")) {
     stop(
-      "file data must be a RasterLayer or RasterBrick.",
+      "file data must be a SpatRaster.",
       "\nProvided: ", class(filedata)
     )
   }
-  if (!class(unit_raster) %in% c("RasterLayer", "RasterBrick")) {
+  if (!is(unit_raster, "SpatRaster")) {
     stop(
-      "unit_raster must be a RasterLayer or RasterBrick.",
+      "unit_raster must be a SpatRaster.",
       "\nProvided: ", class(unit_raster)
     )
   }
   # Check if filedata is global
-  if (matching_extent(
-    extent(filedata),
+  if (exists("global_extent") && matching_extent(
+    terra::ext(filedata),
     global_extent,
-    xres(filedata),
-    yres(filedata)
-  )) {
-    filedata <- setExtent(filedata, global_extent)
+    terra::xres(filedata),
+    terra::yres(filedata)
+  )
+  ) {
+    terra::ext(filedata) <- global_extent
   }
   # Check if unit_raster is global
-  if (matching_extent(
-    extent(unit_raster),
+  if (exists("global_extent") && matching_extent(
+    terra::ext(unit_raster),
     global_extent,
-    xres(unit_raster),
-    yres(unit_raster)
-  )) {
-    unit_raster <- setExtent(unit_raster, global_extent)
+    terra::xres(unit_raster),
+    terra::yres(unit_raster)
+  )
+  ) {
+    terra::ext(unit_raster) <- global_extent
   }
   # Check if cell boundaries of filedata and unit_raster are aligned
-  x <- min(xres(filedata), xres(unit_raster))
-  y <- min(yres(filedata), yres(unit_raster))
-  if (((abs(xmin(unit_raster) - xmin(filedata)) / x) %% 1 > 0.01 &&
-    (abs(xmin(unit_raster) - xmin(filedata)) / x) %% 1 < 0.99) ||
-    ((abs(ymin(unit_raster) - ymin(filedata)) / y) %% 1 > 0.01 &&
-    (abs(ymin(unit_raster) - ymin(filedata)) / y) %% 1 < 0.99)
+  x <- min(terra::xres(filedata), terra::xres(unit_raster))
+  y <- min(terra::yres(filedata), terra::yres(unit_raster))
+  if (
+    ((abs(terra::xmin(unit_raster) - terra::xmin(filedata)) / x) %% 1 > 0.01 &&
+        (abs(terra::xmin(unit_raster) - terra::xmin(filedata)) / x) %% 1 < 0.99
+    ) ||
+    ((abs(terra::ymin(unit_raster) - terra::ymin(filedata)) / y) %% 1 > 0.01 &&
+       (abs(terra::ymin(unit_raster) - terra::ymin(filedata)) / y) %% 1 < 0.99)
   ) {
     stop("Cell boundaries of filedata and unit_raster are mis-aligned")
   }
   # Check if spatial resolutions match
-  file2unit <- res(filedata) / res(unit_raster)
+  file2unit <- terra::res(filedata) / terra::res(unit_raster)
   if (any(file2unit > 1.001 & file2unit %% 1 > 0.001)) {
     stop("Resolution of filedata is not an integer multiple of unit_raster")
   }
@@ -82,21 +86,21 @@ match_admin_to_data <- function(filedata,
       )
     }
     # Load unit_raster into memory to speed up aggregation.
-    if (!inMemory(unit_raster)) {
-      readAll(unit_raster)
+    if (!terra::inMemory(unit_raster)) {
+      unit_raster <- terra::toMemory(unit_raster)
     }
     scale_unit <- ifelse(file2unit > 1, file2unit, 1)
     scale_unit <- round(scale_unit)
-    # Aggregate using most frequent value. Do not use "random" to solve ties to
-    # allow for reproducibility.
-    unit_raster <- aggregate(
+    # Aggregate using "fun" parameter. Note: Should not use "random" to solve
+    # ties in mode calculation to allow for reproducibility.
+    unit_raster <- terra::aggregate(
       unit_raster,
-      scale_unit,
+      rev(scale_unit), # res() returns lon/lat, fact is lat/lon
       fun = fun,
       na.rm = na.rm
     )
     # Update spatial scaling factor
-    file2unit <- res(filedata) / res(unit_raster)
+    file2unit <- terra::res(filedata) / terra::res(unit_raster)
     if (any(file2unit > 1.001 & file2unit %% 1 > 0.001)) {
       stop("Resolution of filedata is not an integer multiple of unit_raster")
     }

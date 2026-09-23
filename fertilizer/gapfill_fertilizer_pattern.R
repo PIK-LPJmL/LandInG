@@ -52,12 +52,12 @@ missval_integer <- -5
 parallel_mpi <- parallel_local <- FALSE # Not to be set by user
 if (cluster) {
   # Try parallelization
-  if (require(Rmpi)) {
+  if ("Rmpi" %in% .packages(all.available = TRUE)) {
     # Rmpi = R implementation of MPI interface
     # This is intended for parallelization on high-performance cluster.
-    if (require(doMPI)) {
+    if ("doMPI" %in% .packages(all.available = TRUE)) {
       # doMPI = interface for foreach construct to run in MPI parallel mode
-       # Start MPI cluster (link R instances together)
+      # Start MPI cluster (link R instances together)
       cl <- doMPI::startMPIcluster()
       # Number of R instances linked together
       num_cluster <- doMPI::clusterSize(cl)
@@ -70,7 +70,7 @@ if (cluster) {
       } else {
         # Only one task
         # Tell foreach to use sequential mode
-        registerDoSEQ()
+        foreach::registerDoSEQ()
         cat("Running in sequential mode because only one node is available.\n")
         num_cluster <- 1
       }
@@ -82,11 +82,11 @@ if (cluster) {
         call. = FALSE,
         immediate. = TRUE
       )
-      registerDoSEQ() # Tell foreach to use sequential mode
+      foreach::registerDoSEQ() # Tell foreach to use sequential mode
       cat("Falling back to running in sequential mode.\n")
       num_cluster <- 1
     }
-  } else if (require(doParallel)) {
+  } else if ("doParallel" %in% .packages(all.available = TRUE)) {
     # Try parallelization through parallel package.
     # This is probably more suitable to run in parallel on a local machine
     # Get number of CPU cores
@@ -104,12 +104,12 @@ if (cluster) {
       # Start cluster on local machine
       cl <- parallel::makeCluster(num_cluster)
       # Tell foreach to use this cluster
-      registerDoParallel(num_cluster)
+      doParallel::registerDoParallel(cl)
       parallel_local <- TRUE
       cat("Running in parallel mode on", num_cluster, "CPUs\n")
     } else {
       # Only one task
-      registerDoSEQ() # Tell foreach to use sequential mode
+      foreach::registerDoSEQ() # Tell foreach to use sequential mode
       cat("Running in sequential mode because only one CPU is available.\n")
     }
   } else {
@@ -121,14 +121,13 @@ if (cluster) {
       call. = FALSE,
       immediate. = TRUE
     )
-    registerDoSEQ() # Tells foreach to use sequential mode
+    foreach::registerDoSEQ() # Tells foreach to use sequential mode
     cat("Falling back to running in sequential mode.\n")
     num_cluster <- 1
   }
 } else {
   # Do not try parallelization
-  library(foreach)
-  registerDoSEQ() # Tells foreach to use sequential mode
+  foreach::registerDoSEQ() # Tells foreach to use sequential mode
   cat("Running in sequential mode.\n")
   num_cluster <- 1
 }
@@ -137,36 +136,44 @@ if (cluster) {
 
 ################################################################################
 ## Load spatial units                                                         ##
-if (fertilizer_pattern_admin == "gadm") {
-  cat("Admin units loaded from", sQuote(gadmlevel_file), "\n")
-  pattern_admin_raster <- brick(gadmlevel_file)
+if (LandInG_setup$fertilizer$fertilizer_pattern_admin == "gadm") {
+  cat(
+    "Admin units loaded from",
+    sQuote(LandInG_setup$fertilizer$gadmlevel_file), "\n"
+  )
+  pattern_admin_raster <- terra::rast(
+    LandInG_setup$fertilizer$gadmlevel_file,
+    subds = LandInG_setup$fertilizer$gadmlevel_variable
+  )
   pattern_admin_names <- read.csv(
-    gadmlevel_names_file,
+    LandInG_setup$fertilizer$gadmlevel_names_file,
     stringsAsFactors = FALSE,
     comment.char = "#"
   )
   # Check spatial extent of GADM units
   if (matching_extent(
-    extent(pattern_admin_raster),
+    terra::ext(pattern_admin_raster),
     global_extent,
-    xres(pattern_admin_raster),
-    yres(pattern_admin_raster)
-  )) {
-    pattern_admin_raster <- setExtent(pattern_admin_raster, global_extent)
+    terra::xres(pattern_admin_raster),
+    terra::yres(pattern_admin_raster)
+  )
+  ) {
+    terra::ext(pattern_admin_raster) <- global_extent
   }
   # Number of countries in each cell used to determine border cells
-  pattern_border_raster <- brick(gadmborder_file)
+  pattern_border_raster <- terra::rast(LandInG_setup$fertilizer$gadmborder_file)
   # Check spatial extent of border raster
   if (matching_extent(
-    extent(pattern_border_raster),
+    terra::ext(pattern_border_raster),
     global_extent,
-    xres(pattern_border_raster),
-    yres(pattern_border_raster)
-  )) {
-    pattern_border_raster <- setExtent(pattern_border_raster, global_extent)
+    terra::xres(pattern_border_raster),
+    terra::yres(pattern_border_raster)
+  )
+  ) {
+    terra::ext(pattern_border_raster) <- global_extent
   }
   # Column name in country grouping that contains matching codes
-  country_grouping_col <- gadm_country_col
+  country_grouping_col <- LandInG_setup$fertilizer$gadm_country_col
   # Find column containing 3-letter ISO code in pattern_admin_names
   iso_col <- grep(
     "level0.code",
@@ -185,46 +192,41 @@ if (fertilizer_pattern_admin == "gadm") {
   if (length(code_col) != 1) {
     stop("Error finding country ID column in pattern_admin_names")
   }
-} else if (fertilizer_pattern_admin == "luh2") {
-  cat("Admin units loaded from", sQuote(luh2country_file), "\n")
-  pattern_admin_raster <- brick(
-    luh2country_file,
-    varname = luh2country_variable,
-    band = luh2country_layer
+} else if (LandInG_setup$fertilizer$fertilizer_pattern_admin == "luh2") {
+  cat(
+    "Admin units loaded from",
+    sQuote(LandInG_setup$fertilizer$luh2country_file), "\n"
+  )
+  pattern_admin_raster <- terra::rast(
+    LandInG_setup$fertilizer$luh2country_file,
+    subds = LandInG_setup$fertilizer$luh2country_variable,
+    lyrs = LandInG_setup$fertilizer$luh2country_layer
   )
   pattern_admin_names <- NULL
   pattern_border_raster <- NULL
-  country_grouping_col <- luh2_country_col
+  country_grouping_col <- LandInG_setup$fertilizer$luh2_country_col
   # No names, therefore no columns with IDs and ISO codes
   iso_col <- NULL
   code_col <- NULL
 } else {
   stop(
-    paste(
-      "Undefined fertilizer_pattern_admin", sQuote(fertilizer_pattern_admin),
-      "\nCheck fertilizer_setup.R"
-    )
+    "Undefined fertilizer_pattern_admin ",
+    sQuote(LandInG_setup$fertilizer$fertilizer_pattern_admin),
+    "\nCheck fertilizer_setup.R"
   )
 }
-if (nlayers(pattern_admin_raster) == 1) {
-  # Reduce brick to raster layer in case of only one layer because single-layer
-  # bricks cause problems in raster package code.
-  pattern_admin_raster <- subset(pattern_admin_raster, 1)
-}
-if (!is.null(pattern_border_raster) && nlayers(pattern_border_raster) == 1) {
-  # Reduce brick to raster layer in case of only one layer because single-layer
-  # bricks cause problems in raster package code.
-  pattern_border_raster <- subset(pattern_border_raster, 1)
-}
-if (!anyNA(values(pattern_admin_raster)) && fertilizer_pattern_strip_zero) {
+if (
+  !anyNA(terra::values(pattern_admin_raster)) &&
+    LandInG_setup$fertilizer$fertilizer_pattern_strip_zero
+) {
   message(
     "Info: Admin data does not contain any NAs and ",
     "fertilizer_pattern_strip_zero is TRUE. Replacing 0 with NA in admin data"
   )
-  pattern_admin_raster <- mask(
+  pattern_admin_raster <- terra::mask(
     pattern_admin_raster,
     pattern_admin_raster,
-    maskvalue = 0
+    maskvalues = 0
   )
 }
 ################################################################################
@@ -232,27 +234,35 @@ if (!anyNA(values(pattern_admin_raster)) && fertilizer_pattern_strip_zero) {
 
 ################################################################################
 ## Load country grouping and crop list                                        ##
-if (file.exists(country_group_file)) {
-  cat("Country groups loaded from", sQuote(country_group_file), "\n")
-  country_group_data <- read.csv(country_group_file, stringsAsFactors = FALSE)
+if (file.exists(LandInG_setup$fertilizer$country_group_file)) {
+  cat(
+    "Country groups loaded from",
+    sQuote(LandInG_setup$fertilizer$country_group_file), "\n"
+  )
+  country_group_data <- read.csv(
+    LandInG_setup$fertilizer$country_group_file,
+    stringsAsFactors = FALSE
+  )
 } else {
   stop(
-    paste(
-      "Country groups file", country_group_file, "does not exist.",
-      "\nPlease check fertilizer_setup.R"
-    )
+    "Country groups file ", LandInG_setup$fertilizer$country_group_file,
+    " does not exist.\nPlease check fertilizer_setup.R"
   )
 }
 
-if (file.exists(mapping_file)) {
-  cat("Crop type mapping loaded from", sQuote(mapping_file), "\n")
-  crop_type_mapping <- read.csv(mapping_file, stringsAsFactors = FALSE)
+if (file.exists(LandInG_setup$fertilizer$mapping_file)) {
+  cat(
+    "Crop type mapping loaded from",
+    sQuote(LandInG_setup$fertilizer$mapping_file), "\n"
+  )
+  crop_type_mapping <- read.csv(
+    LandInG_setup$fertilizer$mapping_file,
+    stringsAsFactors = FALSE
+  )
 } else {
   stop(
-    paste(
-      "Mapping file", mapping_file, "does not exist.",
-      "\nPlease check fertilizer_setup.R"
-    )
+    "Mapping file ", LandInG_setup$fertilizer$mapping_file, " does not exist.",
+    "\nPlease check fertilizer_setup.R"
   )
 }
 
@@ -262,9 +272,9 @@ for (table in c("country_group_data", "crop_mapping")) {
     table_data <- get(table)
     for (col in colnames(table_data)) {
       if (typeof(table_data[, col]) == "character") {
-        if (!all(stri_enc_isascii(table_data[, col]), na.rm = TRUE)) {
+        if (!all(stringi::stri_enc_isascii(table_data[, col]), na.rm = TRUE)) {
           # String has non-ASCII characters
-          if (!all(stri_enc_isutf8(table_data[, col]), na.rm = TRUE)) {
+          if (!all(stringi::stri_enc_isutf8(table_data[, col]), na.rm = TRUE)) {
             # String has non-UTF8 characters -> assume windows-1252 encoding and
             # convert to UTF-8
             message(
@@ -272,7 +282,7 @@ for (table in c("country_group_data", "crop_mapping")) {
               " from windows-1252 to UTF-8 encoding in ",
               table
             )
-            table_data[, col] <- stri_encode(
+            table_data[, col] <- stringi::stri_encode(
               table_data[, col],
               "windows-1252",
               "UTF-8"
@@ -285,8 +295,12 @@ for (table in c("country_group_data", "crop_mapping")) {
             " from UTF-8 to ASCII encoding in ",
             table
           )
-          table_data[, col] <- stri_encode(table_data[, col], "UTF-8", "UTF-8")
-          table_data[, col] <- stri_trans_general(
+          table_data[, col] <- stringi::stri_encode(
+            table_data[, col],
+            "UTF-8",
+            "UTF-8"
+          )
+          table_data[, col] <- stringi::stri_trans_general(
             table_data[, col],
             "latin-ascii"
           )
@@ -302,7 +316,11 @@ for (table in c("country_group_data", "crop_mapping")) {
 if (!country_grouping_col %in% colnames(country_group_data)) {
   # Try to match name using grep
   if (length(
-    grep(country_grouping_col, colnames(country_group_data), ignore.case = TRUE)
+    grep(
+      country_grouping_col,
+      colnames(country_group_data),
+      ignore.case = TRUE
+    )
   ) == 1
   ) {
     message(
@@ -324,20 +342,21 @@ if (!country_grouping_col %in% colnames(country_group_data)) {
     )
   } else {
     stop(
-      paste(
-        "Column country_grouping_col", sQuote(country_grouping_col),
-        "missing in country_group_data"
-      )
+      "Column country_grouping_col ", sQuote(country_grouping_col),
+      " missing in country_group_data"
     )
   }
 }
 
 # Check consistency between admin unit masks and country grouping
-if (fertilizer_pattern_admin == "gadm") {
+if (LandInG_setup$fertilizer$fertilizer_pattern_admin == "gadm") {
   # Check for countries used in GADM but missing in UNSD country_group_data.
   # Variable add_list_gadm defined in helper/fix_admin_masks.R
-  if (exists("add_list_gadm"))
-    country_group_data <- add_to_country_list(country_group_data, add_list_gadm)
+  if (!is.null(LandInG_setup$fertilizer$add_list_gadm))
+    country_group_data <- add_to_country_list(
+      country_group_data,
+      LandInG_setup$fertilizer$add_list_gadm
+    )
 
   # Try to fix country codes used in GADM country mask that are not in UNSD
   # country group listing.
@@ -345,14 +364,14 @@ if (fertilizer_pattern_admin == "gadm") {
   # This only works if GADM names have been provided. Note: subnational units
   # remain unchanged.
   if (!is.null(pattern_admin_names) &&
-    exists("ccode_replacement_gadm")
+      !is.null(LandInG_setup$fertilizer$ccode_replacement_gadm)
   ) {
-    if (nlayers(pattern_admin_raster) == 1) {
-      ccodes <- na.omit(unique(values(pattern_admin_raster)))
+    if (terra::nlyr(pattern_admin_raster) == 1) {
+      ccodes <- ul(terra::unique(pattern_admin_raster, na.rm = TRUE))
     } else {
       national_band <- find_national_band(pattern_admin_raster)
-      ccodes <- na.omit(
-        unique(values(subset(pattern_admin_raster, national_band)))
+      ccodes <- ul(
+        terra::unique(pattern_admin_raster[[national_band]], na.rm = TRUE)
       )
     }
     iso_r <- match(ccodes, pattern_admin_names[, code_col])
@@ -361,55 +380,60 @@ if (fertilizer_pattern_admin == "gadm") {
     name_col <- grep(
       "country", colnames(pattern_admin_names), ignore.case = TRUE
     )
-    for (r in seq_len(nrow(ccode_replacement_gadm))) {
-      if (!ccode_replacement_gadm[r, "source"] %in%
-        country_group_data[, country_grouping_col] &&
-        ccode_replacement_gadm[r, "replacement"] %in%
-        country_group_data[, country_grouping_col] &&
-        ccode_replacement_gadm[r, "replacement"] %in% iso_codes &&
-        ccode_replacement_gadm[r, "source"] %in% iso_codes
+    for (r in seq_len(nrow(LandInG_setup$fertilizer$ccode_replacement_gadm))) {
+      if (!LandInG_setup$fertilizer$ccode_replacement_gadm[r, "source"] %in%
+          country_group_data[, country_grouping_col] &&
+          LandInG_setup$fertilizer$ccode_replacement_gadm[r, "replacement"] %in%
+            country_group_data[, country_grouping_col] &&
+          LandInG_setup$fertilizer$ccode_replacement_gadm[r, "replacement"] %in%
+            iso_codes &&
+          LandInG_setup$fertilizer$ccode_replacement_gadm[r, "source"] %in%
+            iso_codes
       ) {
         r_source <- match(
-          ccode_replacement_luh2[r, "source"],
+          LandInG_setup$fertilizer$ccode_replacement_luh2[r, "source"],
           pattern_admin_names[, iso_col]
         )
         r_replacement <- match(
-          ccode_replacement_luh2[r, "replacement"],
+          LandInG_setup$fertilizer$ccode_replacement_luh2[r, "replacement"],
           pattern_admin_names[, iso_col]
         )
         cat(
-          "Replace country code", sQuote(ccode_replacement_luh2[r, "source"]),
-          "with code", sQuote(ccode_replacement_luh2[r, "replacement"]),
+          "Replace country code",
+          sQuote(LandInG_setup$fertilizer$ccode_replacement_luh2[r, "source"]),
+          "with code",
+          sQuote(LandInG_setup$fertilizer$ccode_replacement_luh2[r, "replacement"]),
           "for", sQuote(pattern_admin_names[r_replacement, name_col]), "\n"
         )
-        if (nlayers(pattern_admin_raster) == 1) {
-          pattern_admin_raster <- mask(
+        if (terra::nlyr(pattern_admin_raster) == 1) {
+          pattern_admin_raster <- terra::mask(
             pattern_admin_raster,
             pattern_admin_raster,
-            maskvalue = pattern_admin_names[r_source, code_col],
+            maskvalues = pattern_admin_names[r_source, code_col],
             updatevalue = pattern_admin_names[r_replacement, code_col]
           )
         } else {
           # Extract band with national values
-          national_raster <- subset(pattern_admin_raster, national_band)
+          national_raster <- terra::subset(pattern_admin_raster, national_band)
           # Only replace values in national band
-          national_raster <- mask(
+          national_raster <- terra::mask(
             national_raster,
             national_raster,
-            maskvalue = pattern_admin_names[r_source, code_col],
+            maskvalues = pattern_admin_names[r_source, code_col],
             updatevalue = pattern_admin_names[r_replacement, code_col]
           )
           # Update values for national_band in pattern_admin_raster
-          pattern_admin_raster <- setValues(
+          terra::set.values(
             pattern_admin_raster,
-            values(national_raster),
+            cells = seq_len(terra::ncell(pattern_admin_raster)),
+            values = terra::values(national_raster),
             layer = national_band
           )
           rm(national_raster)
         }
       }
     }
-  } else if (exists("ccode_replacement_gadm")) {
+  } else if (!is.null(LandInG_setup$fertilizer$ccode_replacement_gadm)) {
     warning(
       "Cannot apply user-defined ccode_replacement_gadm because ",
       "pattern_admin_names is missing.",
@@ -419,13 +443,11 @@ if (fertilizer_pattern_admin == "gadm") {
   }
   # Update all country codes in admin unit mask and check if they are available
   # in country_group_data.
-  if (nlayers(pattern_admin_raster) == 1) {
-    ccodes <- na.omit(unique(values(pattern_admin_raster)))
+  if (terra::nlyr(pattern_admin_raster) == 1) {
+    ccodes <- ul(terra::unique(pattern_admin_raster, na.rm = TRUE))
   } else {
     national_band <- find_national_band(pattern_admin_raster)
-    ccodes <- na.omit(
-      unique(values(subset(pattern_admin_raster, national_band)))
-    )
+    ccodes <- ul(terra::unique(pattern_admin_raster[[national_band]]))
   }
   if (!is.null(pattern_admin_names)) {
     # Replace IDs with ISO codes
@@ -449,7 +471,7 @@ if (fertilizer_pattern_admin == "gadm") {
       )
     }
     rm(name_r, iso_r, iso_codes, pattern_admin_mismatch)
-  } else if(!all(ccodes %in% country_group_data[, country_grouping_col])) {
+  } else if (!all(ccodes %in% country_group_data[, country_grouping_col])) {
     message(
       "Info: country code(s) ",
       toString(setdiff(ccodes, country_group_data[, country_grouping_col])),
@@ -457,47 +479,56 @@ if (fertilizer_pattern_admin == "gadm") {
     )
   }
 }
-if (fertilizer_pattern_admin == "luh2") {
+if (LandInG_setup$fertilizer$fertilizer_pattern_admin == "luh2") {
   # Check for countries used in LUH2 but missing in UNSD country_group_data.
   # Variable add_list_luh2 defined in helper/fix_admin_masks.R
-  if (exists("add_list_luh2")) {
-    country_group_data <- add_to_country_list(country_group_data, add_list_luh2)
+  if (!is.null(LandInG_setup$fertilizer$add_list_luh2)) {
+    country_group_data <- add_to_country_list(
+      country_group_data,
+      LandInG_setup$fertilizer$add_list_luh2
+    )
   }
 
   # Try to fix country codes used in LUH2 country mask that are not in UNSD
   # country group listing.
   # ccode_replacement_luh2 defined in helper/fix_admin_masks.R
-  if (exists("ccode_replacement_luh2") && nlayers(pattern_admin_raster) == 1) {
+  if (!is.null(LandInG_setup$fertilizer$ccode_replacement_luh2) &&
+      terra::nlyr(pattern_admin_raster) == 1
+  ) {
     # All country codes in admin unit mask
-    ccodes <- na.omit(unique(values(pattern_admin_raster)))
+    ccodes <- ul(terra::unique(pattern_admin_raster, na.rm = TRUE))
     # Name column in country_group_data
     name_col <- grep(
       "country", colnames(country_group_data), ignore.case = TRUE
     )
-    for (r in seq_len(nrow(ccode_replacement_luh2))) {
-      if (!ccode_replacement_luh2[r, "source"] %in%
-        country_group_data[, country_grouping_col] &&
-        ccode_replacement_luh2[r, "replacement"] %in%
-        country_group_data[, country_grouping_col]
+    for (r in seq_len(nrow(LandInG_setup$fertilizer$ccode_replacement_luh2))) {
+      if (!LandInG_setup$fertilizer$ccode_replacement_luh2[r, "source"] %in%
+          country_group_data[, country_grouping_col] &&
+          LandInG_setup$fertilizer$ccode_replacement_luh2[r, "replacement"] %in%
+            country_group_data[, country_grouping_col]
       ) {
         r_group <- match(
-          ccode_replacement_luh2[r, "replacement"],
+          LandInG_setup$fertilizer$ccode_replacement_luh2[r, "replacement"],
           country_group_data[, country_grouping_col]
         )
         cat(
-          "Replace country code", sQuote(ccode_replacement_luh2[r, "source"]),
-          "with code", sQuote(ccode_replacement_luh2[r, "replacement"]),
+          "Replace country code",
+          sQuote(LandInG_setup$fertilizer$ccode_replacement_luh2[r, "source"]),
+          "with code",
+          sQuote(LandInG_setup$fertilizer$ccode_replacement_luh2[r, "replacement"]),
           "for", sQuote(country_group_data[r_group, name_col]), "\n"
         )
-        pattern_admin_raster <- mask(
+        pattern_admin_raster <- terra::mask(
           pattern_admin_raster,
           pattern_admin_raster,
-          maskvalue = ccode_replacement_luh2[r, "source"],
-          updatevalue = ccode_replacement_luh2[r, "replacement"]
+          maskvalues =
+            LandInG_setup$fertilizer$ccode_replacement_luh2[r, "source"],
+          updatevalue =
+            LandInG_setup$fertilizer$ccode_replacement_luh2[r, "replacement"]
         )
       }
     }
-  } else if (exists("ccode_replacement_luh2")) {
+  } else if (!is.null(LandInG_setup$fertilizer$ccode_replacement_luh2)) {
     warning(
       "Cannot apply user-defined ccode_replacement_luh2 because ",
       "pattern_admin_raster has more than one band.",
@@ -507,7 +538,7 @@ if (fertilizer_pattern_admin == "luh2") {
   }
   # Update all country codes in admin unit mask and check if they are available
   # in country_group_data.
-  ccodes <- na.omit(unique(values(pattern_admin_raster)))
+  ccodes <- ul(terra::unique(pattern_admin_raster, na.rm = TRUE))
   if (!all(ccodes %in% country_group_data[, country_grouping_col])) {
     warning(
       "country code(s) ",
@@ -527,38 +558,40 @@ if (fertilizer_pattern_admin == "luh2") {
 
 ################################################################################
 ## Gap-fill fertilizer patterns for each crop                                 ##
-crops <- na.omit(crop_type_mapping[, fertilizer_pattern_map_col])
+crops <- na.omit(
+  crop_type_mapping[, LandInG_setup$fertilizer$fertilizer_pattern_map_col]
+)
 crops <- unique(crops[which(nchar(crops) > 0)])
-if (length(fertilizer_pattern_refyear) > 1) {
+if (length(LandInG_setup$fertilizer$fertilizer_pattern_refyear) > 1) {
   warning(
     "downstream scripts currently only support ",
     "fertilizer_pattern_refyear of length 1. You provided: ",
-    toString(fertilizer_pattern_refyear),
+    toString(LandInG_setup$fertilizer$fertilizer_pattern_refyear),
     call. = FALSE,
     immediate. = TRUE
   )
 }
-for (nut in fertilizer_pattern_nutrients) {
+for (nut in LandInG_setup$fertilizer$fertilizer_pattern_nutrients) {
   cat("Nutrient:", nut, "\n")
-  if (!fertilizer_pattern_admin_resmatch) {
+  if (!LandInG_setup$fertilizer$fertilizer_pattern_admin_resmatch) {
     # Admin unit dataset has different resolution. Try to match.
     # Derive filenames per crop, expected filename pattern:
     # [CROP][NUTRIENT]apprate.nc
     filenames <- file.path(
-      fertilizer_pattern_dir,
+      LandInG_setup$fertilizer$fertilizer_pattern_dir,
       paste0(crops, nut, "apprate.nc")
     )
     # If any crop file exists compare resolution to admin unit dataset.
     # Note: this assumes that all crops have the same resolution. Switch off if
     # different crops have different resolution.
     if (any(file.exists(filenames))) {
-      filedata <- brick(filenames[which(file.exists(filenames))[1]])
+      filedata <- terra::rast(filenames[which.min(file.exists(filenames))])
       # Keep a copy of original data to restore
       pattern_admin_raster_backup <- pattern_admin_raster
       pattern_admin_raster <- match_admin_to_data(
         filedata,
         pattern_admin_raster,
-        fun = modal_ties_lowest,
+        fun = modal_ties_first,
         verbose = TRUE
       )
       if (!is.null(pattern_border_raster)) {
@@ -577,9 +610,22 @@ for (nut in fertilizer_pattern_nutrients) {
     # Switch off this part of the code if different crops have different
     # resolutions.
   }
-  crop_loop <- foreach(
+  # Make %dopar% from foreach package available.
+  library(foreach)
+  noexport <- NULL
+  if (parallel_mpi) {
+    # Wrap terra rast objects for sending to parallel tasks
+    pattern_admin_raster_wrapped <- terra::wrap(pattern_admin_raster)
+    pattern_border_raster_wrapped <- terra::wrap(pattern_border_raster)
+    global_extent_vec <- as.vector(global_extent)
+    noexport <- c(
+      "pattern_admin_raster", "pattern_border_raster", "global_extent"
+    )
+  }
+  crop_loop <- foreach::foreach(
     crop = crops,
     .inorder = FALSE,
+    .noexport = noexport,
     .combine = c
   ) %dopar% {
     # Log gap-filling into temporary file
@@ -593,19 +639,26 @@ for (nut in fertilizer_pattern_nutrients) {
     sink(fp, type = "message")
     # Expected filename pattern: [CROP][NUTRIENT]apprate.nc
     filename <- file.path(
-      fertilizer_pattern_dir,
+      LandInG_setup$fertilizer$fertilizer_pattern_dir,
       paste0(crop, nut, "apprate.nc")
     )
     if (file.exists(filename)) {
       # Check file unit
-      file_nc <- nc_open(filename)
-      file_unit <- ncatt_get(file_nc,  paste0(crop, nut, "apprate"), "units")
+      file_nc <- ncdf4::nc_open(filename)
+      file_unit <- ncdf4::ncatt_get(
+        file_nc,
+        paste0(crop, nut, "apprate"),
+        "units"
+      )
       if (file_unit$hasatt &&
-        !grepl(fertilizer_pattern_unit, file_unit$value, ignore.case = TRUE)
+        !grepl(
+          LandInG_setup$fertilizer$fertilizer_pattern_unit, file_unit$value,
+          ignore.case = TRUE
+        )
       ) {
         warning(
           "fertilizer_pattern_unit ",
-          sQuote(fertilizer_pattern_unit),
+          sQuote(LandInG_setup$fertilizer$fertilizer_pattern_unit),
           " defined in fertilizer_setup.R cannot be detected in unit ",
           "defined in NetCDF file", sQuote(file_unit$value),
           ".\nPlease make sure to set correct unit in fertilizer_setup.R",
@@ -613,33 +666,42 @@ for (nut in fertilizer_pattern_nutrients) {
           immediate. = TRUE
         )
       }
-      nc_close(file_nc)
+      ncdf4::nc_close(file_nc)
       cat("Gap-filling", filename, "\n")
-      # Load data as RasterBrick
-      filedata <- brick(filename)
+      if (!exists("pattern_admin_raster")) {
+        # Unwrap on parallel nodes
+        pattern_admin_raster <- terra::unwrap(pattern_admin_raster_wrapped)
+        pattern_border_raster <- terra::unwrap(pattern_border_raster_wrapped)
+        global_extent <- terra::ext(global_extent_vec)
+      }
+      # Load data as SpatRaster
+      filedata <- terra::rast(filename)
       filedata_filled <- gapfill_pattern(
         filedata = filedata,
-        strip_zero = fertilizer_pattern_strip_zero,
+        strip_zero = LandInG_setup$fertilizer$fertilizer_pattern_strip_zero,
         unit_raster = pattern_admin_raster,
+        gextent = global_extent,
         unit_raster_names = pattern_admin_names,
         unit_border_raster = pattern_border_raster,
         # GADM does not match admin units used in source data, so filter cells
         # that may be assigned to wrong country.
-        assign_grid_threshold = fertilizer_pattern_assign_grid_threshold,
+        assign_grid_threshold =
+          LandInG_setup$fertilizer$fertilizer_pattern_assign_grid_threshold,
         fill_regional_data = TRUE,
         # This is the minimum number of countries required in a country group to
         # use that group's value.
-        assign_country_threshold = fertilizer_pattern_assign_country_threshold,
+        assign_country_threshold =
+          LandInG_setup$fertilizer$fertilizer_pattern_assign_country_threshold,
         country_grouping = country_group_data,
         country_grouping_col = country_grouping_col,
-        is_national = fertilizer_pattern_is_national,
-        fert_band = fertilizer_pattern_fert_band,
-        source_band = fertilizer_pattern_source_band,
+        is_national = LandInG_setup$fertilizer$fertilizer_pattern_is_national,
+        fert_band = LandInG_setup$fertilizer$fertilizer_pattern_fert_band,
+        source_band = LandInG_setup$fertilizer$fertilizer_pattern_source_band,
         source_country_vals = c(3, 3.25, 5, 5.25, 5.5, 5.75, 6, 6.25, 6.5, 6.75),
         verbose = TRUE
       )
-      if (nlayers(filedata_filled) !=
-        length(fertilizer_pattern_refyear) * 3 + 1
+      if (terra::nlyr(filedata_filled) !=
+          length(LandInG_setup$fertilizer$fertilizer_pattern_refyear) * 3 + 1
       ) {
         # Cannot use stop() in foreach loop
         message(
@@ -655,11 +717,11 @@ for (nut in fertilizer_pattern_nutrients) {
         # Determine filename of gap-filled data. Resolution may not be the same
         # as unit_raster although we advise to always use unit_raster at same
         # resolution as fertilizer patterns.
-        tmp_res <- ifelse(res(filedata_filled) < 1 / 60, 3600, 60) *
-          res(filedata_filled)
+        tmp_res <- ifelse(terra::res(filedata_filled) < 1 / 60, 3600, 60) *
+          terra::res(filedata_filled)
         tmp_string <- paste(
           unique(round(tmp_res)),
-          unique(ifelse(res(filedata_filled) < 1 / 60, "sec", "min")),
+          unique(ifelse(terra::res(filedata_filled) < 1 / 60, "sec", "min")),
           sep = "",
           collapse = "_by_"
         )
@@ -671,9 +733,9 @@ for (nut in fertilizer_pattern_nutrients) {
           filled_working_dir,
           paste0(
             crop, nut, "apprate_",
-            fertilizer_pattern_admin,
+            LandInG_setup$fertilizer$fertilizer_pattern_admin,
             ifelse(
-              fertilizer_pattern_is_national,
+              LandInG_setup$fertilizer$fertilizer_pattern_is_national,
               "_national",
               "_subnational"
             ),
@@ -681,32 +743,32 @@ for (nut in fertilizer_pattern_nutrients) {
           )
         )
         # Set up NetCDF variables
-        lon_dim <- ncdim_def(
+        lon_dim <- ncdf4::ncdim_def(
           name = "longitude",
           units = "degrees_east",
-          vals = xFromCol(filedata_filled),
+          vals = terra::xFromCol(filedata_filled),
           longname = "longitude"
         )
-        lat_dim <- ncdim_def(
+        lat_dim <- ncdf4::ncdim_def(
           name = "latitude",
           units = "degrees_north",
-          vals = yFromRow(filedata_filled),
+          vals = terra::yFromRow(filedata_filled),
           longname = "latitude"
         )
-        time_dim <- ncdim_def(
+        time_dim <- ncdf4::ncdim_def(
           name = "time",
           units = "year",
-          vals = fertilizer_pattern_refyear,
+          vals = LandInG_setup$fertilizer$fertilizer_pattern_refyear,
         )
-        fert_var <- ncvar_def(
+        fert_var <- ncdf4::ncvar_def(
           name = paste0(crop, nut, "apprate"),
-          units = fertilizer_pattern_unit,
+          units = LandInG_setup$fertilizer$fertilizer_pattern_unit,
           dim = list(lon_dim, lat_dim, time_dim),
           missval = missval_float,
           longname = paste(nut, "fertilizer application rate for", crop),
           compression = 5
         )
-        gapfill_stats_var <- ncvar_def(
+        gapfill_stats_var <- ncdf4::ncvar_def(
           name = "gapfill_level",
           units = "",
           dim = list(lon_dim, lat_dim, time_dim),
@@ -714,7 +776,7 @@ for (nut in fertilizer_pattern_nutrients) {
           longname = "Level at which gap-filling was performed",
           compression = 5
         )
-        gapfill_source_var <- ncvar_def(
+        gapfill_source_var <- ncdf4::ncvar_def(
           name = "gapfill_sources",
           units = "",
           dim = list(lon_dim, lat_dim, time_dim),
@@ -724,44 +786,69 @@ for (nut in fertilizer_pattern_nutrients) {
           compression = 5
         )
         # Create output file
-        nc <- nc_create(
+        nc <- ncdf4::nc_create(
           filename_filled,
           list(fert_var, gapfill_stats_var, gapfill_source_var)
         )
-        ncatt_put(
-          nc, paste0(crop, nut, "apprate"), "missing_value", missval_float
+        ncdf4::ncatt_put(
+          nc,
+          paste0(crop, nut, "apprate"),
+          "missing_value",
+          missval_float,
+          prec = "float"
         )
-        ncatt_put(nc, "gapfill_level", "missing_value", missval_float)
-        ncatt_put(nc, "gapfill_sources", "missing_value", missval_integer)
-        nc_sync(nc)
-        band <- seq_along(fertilizer_pattern_refyear)
-        writedata <- as.double(values(subset(filedata_filled, band)))
+        ncdf4::ncatt_put(
+          nc,
+          "gapfill_level",
+          "missing_value",
+          missval_float,
+          prec = "float"
+        )
+        ncdf4::ncatt_put(nc, "gapfill_sources", "missing_value", missval_integer)
+        # Save LandInG version number in file.
+        ncdf4::ncatt_put(
+          nc = nc,
+          varid = 0,
+          attname = "LandInG_version",
+          attval = LandInG_setup$LandInG_version
+        )
+        ncdf4::nc_sync(nc)
+        band <- seq_along(LandInG_setup$fertilizer$fertilizer_pattern_refyear)
+        writedata <- as.double(
+          ul(terra::values(terra::subset(filedata_filled, band)))
+        )
         writedata[which(is.na(writedata))] <- missval_float
-        ncvar_put(
+        ncdf4::ncvar_put(
           nc,
           paste0(crop, nut, "apprate"),
           writedata,
         )
         rm(writedata)
-        band <- band + length(fertilizer_pattern_refyear)
-        writedata <- as.double(values(subset(filedata_filled, band)))
+        band <- band +
+          length(LandInG_setup$fertilizer$fertilizer_pattern_refyear)
+        writedata <- as.double(
+          ul(terra::values(terra::subset(filedata_filled, band)))
+        )
         writedata[which(is.na(writedata))] <- missval_float
-        ncvar_put(
+        ncdf4::ncvar_put(
           nc,
           "gapfill_level",
           writedata,
         )
         rm(writedata)
-        band <- band + length(fertilizer_pattern_refyear)
-        writedata <- as.integer(round(values(subset(filedata_filled, band))))
+        band <- band +
+          length(LandInG_setup$fertilizer$fertilizer_pattern_refyear)
+        writedata <- as.integer(
+          round(ul(terra::values(terra::subset(filedata_filled, band))))
+        )
         writedata[which(is.na(writedata))] <- missval_integer
-        ncvar_put(
+        ncdf4::ncvar_put(
           nc,
           "gapfill_sources",
           writedata,
         )
         rm(writedata)
-        nc_close(nc)
+        ncdf4::nc_close(nc)
         # Stop logging to temporary file.
         sink(type = "output")
         sink(type = "message")
@@ -771,9 +858,9 @@ for (nut in fertilizer_pattern_nutrients) {
           filled_working_dir,
           paste0(
             crop, nut, "apprate_",
-            fertilizer_pattern_admin,
+            LandInG_setup$fertilizer$fertilizer_pattern_admin,
             ifelse(
-              fertilizer_pattern_is_national,
+              LandInG_setup$fertilizer$fertilizer_pattern_is_national,
               "_national",
               "_subnational"
             ),

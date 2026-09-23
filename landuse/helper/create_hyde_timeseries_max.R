@@ -14,22 +14,21 @@
 ## on Linux if cdo is installed and discoverable in PATH.                     ##
 ## CDO tools: https://code.mpimet.mpg.de/projects/cdo                         ##
 ## Parameters:                                                                ##
-## source: NetCDF file with HYDE time series                                  ##
-## target: Created NetCDF with maximum values                                 ##
-## varname: Name of variable in source                                        ##
-## sourcearea: raster object giving cell areas of HYDE data in source.        ##
-## targetarea: raster object giving cell areas at target resolution.          ##
-## targetraster: raster object at target resolution, if coarser than HYDE     ##
-##               source, data is aggregated.                                  ##
+## source: NetCDF file with HYDE time series.                                 ##
+## target: Created NetCDF with maximum values.                                ##
+## varname: Name of variable in source.                                       ##
+## sourcearea: rast object giving cell areas of HYDE data in source.          ##
+## targetarea: rast object giving cell areas at target resolution; if coarser ##
+##             than HYDE source data is aggregated.                           ##
+## area_units: expected area unit.
 ## force: whether to force calcution if target file exists already.           ##
-## Note: hyde_area_units is defined in landuse_setup.R                        ##
 ################################################################################
 create_hyde_timeseries_max <- function(source,
                                        target,
                                        varname,
-                                       sourcearea = hyde_area,
-                                       targetarea = hyde_target_area,
-                                       targetraster = gadm_raster,
+                                       sourcearea,
+                                       targetarea,
+                                       area_units,
                                        force = FALSE
                                       ) {
   if (file.exists(target)) {
@@ -47,18 +46,19 @@ create_hyde_timeseries_max <- function(source,
       )
     }
   }
-  # Check spatial extent of source data against targetraster
-  tmpraster <- raster(source, level = 0)
+  # Check spatial extent of source data against targetarea
+  tmpraster <- terra::rast(source, lyrs = 1)
   if (matching_extent(
-    extent(tmpraster),
-    extent(targetraster),
-    xres(tmpraster),
-    yres(tmpraster)
+    terra::ext(tmpraster),
+    terra::ext(targetarea),
+    terra::xres(tmpraster),
+    terra::yres(tmpraster)
   )) {
     # Matching extent, next check resolution of source data
-    if (ncol(tmpraster) == ncol(targetraster) &&
-      nrow(tmpraster) == nrow(targetraster)) {
-      ## Source has same extent and resolution as targetraster
+    if (terra::ncol(tmpraster) == terra::ncol(targetarea) &&
+        terra::nrow(tmpraster) == terra::nrow(targetarea)
+    ) {
+      ## Source has same extent and resolution as targetarea
       # Try if cdo can be called from within R
       runtest <- system(
         "cdo --version",
@@ -82,22 +82,25 @@ create_hyde_timeseries_max <- function(source,
         }
       }
     } else {
-      # Source resolution differs from targetraster, first calculate maximum
+      # Source resolution differs from targetarea, first calculate maximum
       # across time, then aggregate to target resolution.
       # Working directory based on resolution
       tmp_res <- unique(
-        res(tmpraster) * ifelse(res(tmpraster) >= 1 / 60, 60, 3600)
+        terra::res(tmpraster) * ifelse(terra::res(tmpraster) >= 1 / 60, 60, 3600)
       )
       tmp_string <- paste(
         round(tmp_res),
-        unique(ifelse(res(tmpraster) >= 1 / 60, "min", "sec")),
+        unique(ifelse(terra::res(tmpraster) >= 1 / 60, "min", "sec")),
         sep = "",
         collapse = "_by_"
       )
 
       hyde_working_dir <- ifelse(
-        nchar(landuse_dir) > 0,
-        file.path(landuse_dir, "tmp", paste0("work_", tmp_string)),
+        nchar(LandInG_setup$landuse$landuse_dir) > 0,
+        file.path(
+          LandInG_setup$landuse$landuse_dir,
+          "tmp", paste0("work_", tmp_string)
+        ),
         file.path("tmp", paste0("work_", tmp_string))
       )
       if (!file.exists(hyde_working_dir)) {
@@ -127,81 +130,104 @@ create_hyde_timeseries_max <- function(source,
         if (run != 0) {
           stop("File creation failed.")
         }
-        # Check unit in created file and compare to hyde_area_units
-        zz <- nc_open(working_target)
-        if (ud.convert(1, hyde_area_units, zz$var[[varname]]$units) != 1) {
+        # Check unit in created file and compare to area_units
+        nc <- ncdf4::nc_open(working_target)
+        if (units::ud_convert(1, area_units, nc$var[[varname]]$units) != 1) {
           warning(
             "Unit in file ", sQuote(working_target),
-            " [", zz$var$cropland$units, "] ",
-            "differs from defined hyde_area_units [", hyde_area_units, "].",
+            " [", nc$var$cropland$units, "] ",
+            "differs from defined area_units [", area_units, "].",
             call. = TRUE,
             immediate. = TRUE
           )
           # Update unit within function
-          hyde_area_units <- zz$var[[varname]]$units
-          hyde_is_fraction <- !ud.are.convertible(hyde_area_units, "m2")
+          area_units <- nc$var[[varname]]$units
+          hyde_is_fraction <- !units::ud_are_convertible(area_units, "m2")
         }
-        nc_close(zz)
+        ncdf4::nc_close(nc)
         # Load intermediate data
-        working_target_data <- raster(working_target)
-        hyde2gadm <-  round(res(working_target_data) / res(targetraster), 4)
+        working_target_data <- terra::rast(working_target)
+        hyde2gadm <-  round(
+          terra::res(targetarea) / terra::res(working_target_data),
+          4
+        )
         # Check compatibility of source and target resolution
         if (max(hyde2gadm %% 1) != 0 || min(hyde2gadm) < 1) {
           stop(
             "Source resolution ",
-            toString(round(res(working_target_data), 5)),
+            toString(round(terra::res(working_target_data), 5)),
             " is not compatible with target resolution in this script ",
-            toString(round(res(targetraster), 5))
+            toString(round(terra::res(targetarea), 5))
           )
         }
         if (hyde_is_fraction) {
           # Need to multiply hyde fractions with cell area to aggregate areas
-          tmparea <- working_target_data * ud.convert(1, hyde_area_units, "1") *
-            sourcearea
-          target_data <- aggregate(tmparea, fact = hyde2gadm, fun = sum)
-          # Confirm that aggregation hasn't changed global total
-          sum1 <- cellStats(target_data, sum)
-          sum2 <- cellStats(tmparea, sum)
-          if (sum1 != sum2) {
+          tmparea <- working_target_data *
+            units::ud_convert(1, area_units, "1") * sourcearea
+          target_data <- terra::aggregate(
+            tmparea,
+            fact = rev(hyde2gadm), # res() returns lon/lat, fact is lat/lon
+            fun = "sum",
+            na.rm = TRUE
+          )
+          # Confirm that aggregation has not changed global total
+          sum1 <- terra::global(target_data, "sum", na.rm = TRUE)
+          sum2 <- terra::global(tmparea, "sum", na.rm = TRUE)
+          if (!isTRUE(all.equal(sum1, sum2))) {
             stop("Error aggregating target_data to target resolution")
           }
           rm(tmparea, sum1, sum2)
           # Save to target with unit "1" (fraction)
-          writeRaster(
-            target_data / targetarea,
-            filename = target,
-            varname = varname,
-            varunit = "1"
-          )
+          if (grepl(".nc[0-9]*$", target)) {
+            terra::writeCDF(
+              target_data / targetarea,
+              filename = target,
+              varname = varname,
+              unit = "1"
+            )
+          } else {
+            terra::writeRaster(
+              target_data / targetarea,
+              filename = target
+            )
+          }
         } else {
           # Data is in absolute area, can be summed up
-          target_data <- aggregate(
+          target_data <- terra::aggregate(
             working_target_data,
-            fact = hyde2gadm,
-            fun = sum
+            fact = rev(hyde2gadm), # res() returns lon/lat, fact is lat/lon
+            fun = "sum",
+            na.rm = TRUE
           )
-          sum1 <- cellStats(target_data, sum)
-          sum2 <- cellStats(working_target_data, sum)
-          if (sum1 != sum2) {
+          sum1 <- terra::global(target_data, "sum", na.rm = TRUE)
+          sum2 <- terra::global(working_target_data, "sum", na.rm = TRUE)
+          if (!isTRUE(all.equal(sum1, sum2))) {
             stop("Error aggregating target_data to target resolution")
           }
           rm(sum1, sum2)
-          # Save to target with unit hyde_area_units
-          writeRaster(
-            target_data,
-            filename = target,
-            varname = varname,
-            varunit = hyde_area_units
-          )
+          if (grepl(".nc[0-9]*$", target)) {
+            # Save to target with unit area_units
+            terra::writeCDF(
+              target_data,
+              filename = target,
+              varname = varname,
+              unit = area_units
+            )
+          } else {
+            terra::writeRaster(
+              target_data,
+              filename = target
+            )
+          }
         }
       }
     }
   } else {
     stop(
       "Spatial extent of source file ", sQuote(source),
-      " does not match spatial extent of targetraster"
+      " does not match spatial extent of targetarea"
     )
   }
   # Return file name of target file invisibly
-  return(invisible(target))
+  invisible(target)
 }

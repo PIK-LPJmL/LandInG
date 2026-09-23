@@ -28,35 +28,44 @@ source("landuse_setup.R")
 
 ################################################################################
 ## Load Aquastat CSV flat file                                                ##
-cat("Loading Aquastat data from", sQuote(aquastat_file), "\n")
-if (aquastat_file_all_column_names) {
+cat(
+  "Loading Aquastat data from",
+  sQuote(LandInG_setup$landuse$aquastat_file),
+  "\n"
+)
+if (LandInG_setup$landuse$aquastat_file_all_column_names) {
   aquastat_rawdata <- read.csv(
-    aquastat_file,
+    LandInG_setup$landuse$aquastat_file,
     strip.white = TRUE,
     quote = "\"",
     flush = TRUE,
-    colClasses = aquastat_file_column_classes,
+    colClasses = LandInG_setup$landuse$aquastat_file_column_classes,
     stringsAsFactors = FALSE,
-    skip = aquastat_file_empty_rows
+    skip = LandInG_setup$landuse$aquastat_file_empty_rows
   )
 } else {
   column_names <- scan(
-    aquastat_file,
+    LandInG_setup$landuse$aquastat_file,
     what = character(),
     sep = ",",
-    skip = aquastat_file_empty_rows,
+    skip = LandInG_setup$landuse$aquastat_file_empty_rows,
     nlines = 1,
     quote = "\"",
     quiet = TRUE
   )
-  if (length(column_names) < length(aquastat_file_column_classes)) {
+  if (
+    length(column_names) <
+      length(LandInG_setup$landuse$aquastat_file_column_classes)
+  ) {
     cat(
       "Adding dummy column name(s)",
       toString(
         paste0(
           "Unnamed",
-          seq(1, length.out = length(aquastat_file_column_classes) -
-              length(column_names))
+          seq_len(
+            length(LandInG_setup$landuse$aquastat_file_column_classes) -
+              length(column_names)
+          )
         )
       ),
       "\n"
@@ -65,27 +74,33 @@ if (aquastat_file_all_column_names) {
       column_names,
       paste0(
         "Unnamed",
-        seq(1, length.out = length(aquastat_file_column_classes) -
-            length(column_names))
+        seq_len(
+          length(LandInG_setup$landuse$aquastat_file_column_classes) -
+            length(column_names)
+        )
       )
     )
-  } else if (length(column_names) > length(aquastat_file_column_classes)) {
+  } else if (
+    length(column_names) >
+      length(LandInG_setup$landuse$aquastat_file_column_classes)
+  ) {
     stop(
       "Number of elements in aquastat_file_column_classes (",
-      length(aquastat_file_column_classes),
-      ") does not match column_names read from ", sQuote(aquastat_file), ": ",
+      length(LandInG_setup$landuse$aquastat_file_column_classes),
+      ") does not match column_names read from ",
+      sQuote(LandInG_setup$landuse$aquastat_file), ": ",
       toString(sQuote(column_names)),
       " (", length(column_names), " names read in total)"
     )
   }
   aquastat_rawdata <- read.csv(
-    aquastat_file,
+    LandInG_setup$landuse$aquastat_file,
     strip.white = TRUE,
     quote = "\"",
     flush = TRUE,
-    colClasses = aquastat_file_column_classes,
+    colClasses = LandInG_setup$landuse$aquastat_file_column_classes,
     stringsAsFactors = FALSE,
-    skip = aquastat_file_empty_rows + 1,
+    skip = LandInG_setup$landuse$aquastat_file_empty_rows + 1,
     header = FALSE
   )
   colnames(aquastat_rawdata) <- column_names
@@ -93,7 +108,7 @@ if (aquastat_file_all_column_names) {
 # Split into data part and Metadata
 # Data rows: First 4 columns cannot be empty
 aquastat_datarows <- which(
-  !apply(aquastat_rawdata, 1, function(indata) any(is.na(indata[1:4])))
+  !apply(aquastat_rawdata, 1, function(indata) any(is.na(indata[seq_len(4)])))
 )
 # Footnote rows: Row starts with [#] in first column
 aquastat_footrows <- grep("^\\[[0-9]+\\]", aquastat_rawdata[, 1])
@@ -116,8 +131,8 @@ cat(
 
 ################################################################################
 ## FAOSTAT definitions and standards                                          ##
-fao_production_country_def <- fread(
-  fao_production_country_file,
+fao_production_country_def <- data.table::fread(
+  LandInG_setup$landuse$fao_production_country_file,
   na.strings = "...",
   # country code for Namibia is "NA", which would normally be converted into NA
   check.names = TRUE,
@@ -131,16 +146,16 @@ for (table in c("fao_production_country_def", "aquastat_rawdata")) {
   table_data <- get(table)
   for (c in colnames(table_data)) {
     if (typeof(table_data[, c]) == "character") {
-      if (!all(stri_enc_isascii(table_data[, c]), na.rm = TRUE)) {
+      if (!all(stringi::stri_enc_isascii(table_data[, c]), na.rm = TRUE)) {
         # String has non-ASCII characters
-        if (!all(stri_enc_isutf8(table_data[, c]), na.rm = TRUE)) {
+        if (!all(stringi::stri_enc_isutf8(table_data[, c]), na.rm = TRUE)) {
           # String has non-UTF8 characters -> assume windows-1252 encoding and
           # convert to UTF-8
           message(
             "Converting column ", sQuote(c),
             " from windows-1252 to UTF-8 encoding in ", table
           )
-          table_data[, c] <- stri_encode(
+          table_data[, c] <- stringi::stri_encode(
             table_data[, c],
             "windows-1252",
             "UTF-8"
@@ -152,8 +167,15 @@ for (table in c("fao_production_country_def", "aquastat_rawdata")) {
           "Converting column ", sQuote(c),
           " from UTF-8 to ASCII encoding in ", table
         )
-        table_data[, c] <- stri_encode(table_data[, c], "UTF-8", "UTF-8")
-        table_data[, c] <- stri_trans_general(table_data[, c], "latin-ascii")
+        table_data[, c] <- stringi::stri_encode(
+          table_data[, c],
+          "UTF-8",
+          "UTF-8"
+        )
+        table_data[, c] <- stringi::stri_trans_general(
+          table_data[, c],
+          "latin-ascii"
+        )
       }
     }
   }
@@ -187,7 +209,10 @@ val_col <- grep(
   value = TRUE
 )
 if (length(val_col) != 1) {
-  stop("Cannot determine value column automatically in ", sQuote(aquastat_file))
+  stop(
+    "Cannot determine value column automatically in ",
+    sQuote(LandInG_setup$landuse$aquastat_file)
+  )
 } else {
   cat("Column containing values:", sQuote(val_col), "\n")
 }
@@ -203,7 +228,10 @@ year_col <- grep(
   value = TRUE
 )
 if (length(year_col) != 1) {
-  stop("Cannot determine year column automatically in ", sQuote(aquastat_file))
+  stop(
+    "Cannot determine year column automatically in ",
+    sQuote(LandInG_setup$landuse$aquastat_file)
+  )
 } else {
   cat("Column containing year information:", sQuote(year_col), "\n")
 }
@@ -214,17 +242,24 @@ aquastat_years <- range(
 # Metadata column. Index is defined in landuse_setup.R
 cat(
   "Column(s) containing Metadata:",
-  toString(sQuote(colnames(aquastat_rawdata)[aquastat_file_metadata_col])), "\n"
+  toString(
+    sQuote(
+      colnames(aquastat_rawdata)[LandInG_setup$landuse$aquastat_file_metadata_col]
+    )
+  ),
+  "\n"
 )
-metadata_col <- colnames(aquastat_rawdata)[aquastat_file_metadata_col]
+metadata_col <-
+  colnames(aquastat_rawdata)[LandInG_setup$landuse$aquastat_file_metadata_col]
 
 # Consistency check for names
-if (!aquastat_file_use_FAOSTAT_country_col %in%
-  colnames(fao_production_country_def)
+if (
+  !LandInG_setup$landuse$aquastat_file_use_FAOSTAT_country_col %in%
+    colnames(fao_production_country_def)
 ) {
   stop(
     "aquastat_file_use_FAOSTAT_country_col ",
-    sQuote(aquastat_file_use_FAOSTAT_country_col),
+    sQuote(LandInG_setup$landuse$aquastat_file_use_FAOSTAT_country_col),
     " not found in fao_production_country_def.\n",
     "Check setting in landuse_setup.R"
   )
@@ -239,8 +274,9 @@ index2 <- grep(
   invert = TRUE,
   value = TRUE
 )
-mismatch <- which(!aquastat_countries[, index1] %in%
-  fao_production_country_def[, aquastat_file_use_FAOSTAT_country_col]
+mismatch <- which(
+  !aquastat_countries[, index1] %in%
+    fao_production_country_def[, LandInG_setup$landuse$aquastat_file_use_FAOSTAT_country_col]
 )
 if (length(mismatch) > 0) {
   stop(
@@ -256,7 +292,7 @@ if (length(mismatch) > 0) {
 }
 index <- match(
   aquastat_countries[, index1],
-  fao_production_country_def[, aquastat_file_use_FAOSTAT_country_col]
+  fao_production_country_def[, LandInG_setup$landuse$aquastat_file_use_FAOSTAT_country_col]
 )
 newnames <- fao_production_country_def$Country[index]
 for (n in which(newnames != aquastat_countries[, index2])) {
@@ -312,10 +348,10 @@ varname_table <- data.frame(
   stringsAsFactors = FALSE
 )
 # ID column
-index1 <- grep("id", colnames(varname_table)[1:2], ignore.case = TRUE)
+index1 <- grep("id", colnames(varname_table)[seq_len(2)], ignore.case = TRUE)
 # Value column
 index2 <- grep(
-  "id", colnames(varname_table)[1:2],
+  "id", colnames(varname_table)[seq_len(2)],
   ignore.case = TRUE,
   invert = TRUE
 )
@@ -335,15 +371,23 @@ print(
     sep = " -> "
   )
 )
-if (!ud.are.convertible(aquastat_area_source_units, aquastat_area_units)) {
+if (
+  !units::ud_are_convertible(
+    LandInG_setup$landuse$aquastat_area_source_units,
+    LandInG_setup$landuse$aquastat_area_units
+  )
+) {
   stop(
-    "aquastat_area_source_units ", sQuote(aquastat_area_source_units),
-    " cannot be converted to aquastat_area_units ", sQuote(aquastat_area_units)
+    "aquastat_area_source_units ",
+    sQuote(LandInG_setup$landuse$aquastat_area_source_units),
+    " cannot be converted to aquastat_area_units ",
+    sQuote(LandInG_setup$landuse$aquastat_area_units)
   )
 } else {
   cat(
     "Areas in AQUASTAT data will be converted from",
-    sQuote(aquastat_area_source_units), "to", sQuote(aquastat_area_units), "\n"
+    sQuote(LandInG_setup$landuse$aquastat_area_source_units), "to",
+    sQuote(LandInG_setup$landuse$aquastat_area_units), "\n"
   )
 }
 ################################################################################
@@ -362,38 +406,57 @@ index <- grep(
 )
 aquastat_array <- aquastat_metadata <- array(
   dim = c(
-    nrow(aquastat_countries),
-    nrow(aquastat_vars),
-    length(min(aquastat_years):max(aquastat_years))
+    country = nrow(aquastat_countries),
+    item = nrow(aquastat_vars),
+    time = diff(aquastat_years) + 1
   ),
   dimnames = list(
-    aquastat_countries[, index],
-    varname_table$newname,
-    format(min(aquastat_years):max(aquastat_years), scientific = FALSE)
+    country = aquastat_countries[, index],
+    item = varname_table$newname,
+    time = seq(min(aquastat_years), max(aquastat_years))
   )
 )
 
 metadata_decision <- list()
-if (file.exists(aquastat_rdata)) {
-  warning("Output file ", sQuote(aquastat_rdata), " exists already.",
-          call. = FALSE, immediate. = TRUE)
-  load(aquastat_rdata)
-  if (aquastat_file_run_interactively) {
+if (file.exists(LandInG_setup$landuse$aquastat_rdata)) {
+  warning(
+    "Output file ", sQuote(LandInG_setup$landuse$aquastat_rdata),
+    " exists already.",
+    call. = FALSE, immediate. = TRUE
+  )
+  aquastat_env <- new.env()
+  load(LandInG_setup$landuse$aquastat_rdata, envir = aquastat_env)
+  if (is.null(aquastat_env$LandInG_version) ||
+      aquastat_env$LandInG_version == "1.0.0"
+  ) {
+    # Some variable names have changed compared to LandInG version 1.0.0 so data
+    # is not compatible.
+    stop(
+      "Existing ", sQuote(LandInG_setup$landuse$aquastat_rdata),
+      " is incompatible with this LandInG version.",
+      "\nPlease delete file and rerun this script."
+    )
+  }
+  if (LandInG_setup$landuse$aquastat_file_run_interactively) {
     choice <- ""
-    if (aquastat_aquastat_file_run_interactively !=
-        aquastat_file_run_interactively
+    if (
+      aquastat_env$aquastat_file_run_interactively !=
+        LandInG_setup$landuse$aquastat_file_run_interactively
     ) {
       message(
-        "Additional warning: Existing outfile ", sQuote(aquastat_rdata),
+        "Additional warning: Existing outfile ",
+        sQuote(LandInG_setup$landuse$aquastat_rdata),
         " used non-interactive mode while current run uses interactive mode",
         " which may lead to different results."
       )
     }
-    if (aquastat_file_used != aquastat_file) {
+    if (aquastat_env$aquastat_file != LandInG_setup$landuse$aquastat_file) {
       message(
-        "Additional warning: Existing outfile ", sQuote(aquastat_rdata),
-        " was based on ", sQuote(aquastat_file_used),
-        " whereas aquastat_file is set to ", sQuote(aquastat_file),
+        "Additional warning: Existing outfile ",
+        sQuote(LandInG_setup$landuse$aquastat_rdata),
+        " was based on ", sQuote(aquastat_env$aquastat_file),
+        " whereas aquastat_file is set to ",
+        sQuote(LandInG_setup$landuse$aquastat_file),
         " for this run."
       )
     }
@@ -411,30 +474,37 @@ if (file.exists(aquastat_rdata)) {
       stop("Run canceled by user")
     }
   } else {
-    if (aquastat_aquastat_file_run_interactively !=
-        aquastat_file_run_interactively
+    if (
+      aquastat_env$aquastat_file_run_interactively !=
+        LandInG_setup$landuse$aquastat_file_run_interactively
     ) {
       stop(
-        "Outfile ", sQuote(aquastat_rdata),
+        "Outfile ", sQuote(LandInG_setup$landuse$aquastat_rdata),
         " used interactive mode while current run uses non-interactive mode",
         " which may lead to different results.\n",
         "Change aquastat_rdata or remove existing file to force re-run."
       )
     }
-    if (aquastat_file_used != aquastat_file) {
+    if (aquastat_env$aquastat_file != LandInG_setup$landuse$aquastat_file) {
       stop(
-        "Existing outfile ", sQuote(aquastat_rdata),
-        " was based on ", sQuote(aquastat_file_used),
-        " whereas aquastat_file is set to ", sQuote(aquastat_file),
+        "Existing outfile ", sQuote(LandInG_setup$landuse$aquastat_rdata),
+        " was based on ", sQuote(aquastat_env$aquastat_file),
+        " whereas aquastat_file is set to ",
+        sQuote(LandInG_setup$landuse$aquastat_file),
         " for this run.\n",
         "Change aquastat_rdata or remove existing file to force re-run."
       )
     }
   }
-  cat("Existing outfile", sQuote(aquastat_rdata), "will be overwritten.\n")
+  rm(aquastat_env)
+  cat(
+    "Existing outfile",
+    sQuote(LandInG_setup$landuse$aquastat_rdata),
+    "will be overwritten.\n"
+  )
 }
 
-if (aquastat_file_run_interactively) {
+if (LandInG_setup$landuse$aquastat_file_run_interactively) {
   cat(
     "Running in interactive mode. You will be asked to decide on how to",
     "handle values with additional metadata.\n"
@@ -508,14 +578,14 @@ for (r in aquastat_datarows) {
       sQuote(
         paste(
           format(
-            ud.convert(
+            units::ud_convert(
               aquastat_rawdata[r, val_col],
-              aquastat_area_source_units,
-              aquastat_area_units
+              LandInG_setup$landuse$aquastat_area_source_units,
+              LandInG_setup$landuse$aquastat_area_units
             ),
             scientific = FALSE
           ),
-          aquastat_area_units
+          LandInG_setup$landuse$aquastat_area_units
         )
       ),
       "for", sQuote(crop), "in", sQuote(country), "and year", year,
@@ -529,7 +599,7 @@ for (r in aquastat_datarows) {
         "Limited reference area:",
         toString(footnotevalues[index]), "\n"
       )
-      if (aquastat_file_run_interactively) {
+      if (LandInG_setup$landuse$aquastat_file_run_interactively) {
         # Check if user has made a choice for the same footnote before, if so
         # tell them
         for (c in intersect(footnotevalues[index], names(metadata_decision))) {
@@ -578,7 +648,7 @@ for (r in aquastat_datarows) {
         "Reference period information:",
         toString(footnotevalues[index]), "\n"
       )
-      if (aquastat_file_run_interactively) {
+      if (LandInG_setup$landuse$aquastat_file_run_interactively) {
         # Check if user has made a choice for the same footnote before, if so
         # tell them
         for (c in intersect(footnotevalues[index], names(metadata_decision))) {
@@ -622,7 +692,7 @@ for (r in aquastat_datarows) {
     # Do not process footnote if user has already decided to drop value
     index <- which(
       grepl("observation", footnotetypes, ignore.case = TRUE) |
-      grepl("component", footnotetypes, ignore.case = TRUE)
+        grepl("component", footnotetypes, ignore.case = TRUE)
     )
     if (length(index) > 0 && choice != "d") {
       cat(
@@ -633,7 +703,7 @@ for (r in aquastat_datarows) {
         ),
         toString(footnotevalues[index]), "\n"
       )
-      if (aquastat_file_run_interactively) {
+      if (LandInG_setup$landuse$aquastat_file_run_interactively) {
         textonly <- which(!grepl("[0-9]+", footnotevalues[index]))
         if (length(textonly) > 0) {
           # Only text in footnote
@@ -729,7 +799,7 @@ for (r in aquastat_datarows) {
     index <- grep("accuracy", footnotetypes, ignore.case = TRUE)
     if (length(index) > 0 && choice != "d") {
       cat("Accuracy information:", toString(footnotevalues[index]), "\n")
-      if (aquastat_file_run_interactively) {
+      if (LandInG_setup$landuse$aquastat_file_run_interactively) {
         # Check if user has made a choice for the same footnote before, if so
         # tell them
         for (c in intersect(footnotevalues[index], names(metadata_decision))) {
@@ -774,7 +844,7 @@ for (r in aquastat_datarows) {
     index <- grep("adjust", footnotetypes, ignore.case = TRUE)
     if (length(index) > 0 && choice != "d") {
       cat("Adjustment information:", toString(footnotevalues[index]), "\n")
-      if (aquastat_file_run_interactively) {
+      if (LandInG_setup$landuse$aquastat_file_run_interactively) {
         # Check if user has made a choice for the same footnote before, if so
         # tell them
         for (c in intersect(footnotevalues[index], names(metadata_decision))) {
@@ -827,7 +897,7 @@ for (r in aquastat_datarows) {
         "information:",
         toString(footnotevalues[index]), "\n"
       )
-      if (aquastat_file_run_interactively) {
+      if (LandInG_setup$landuse$aquastat_file_run_interactively) {
         # Check if user has made a choice for the same footnote before, if so
         # tell them
         for (c in intersect(footnotevalues[index], names(metadata_decision))) {
@@ -873,7 +943,7 @@ for (r in aquastat_datarows) {
         "Unknown metadata information:",
         footnotetypes, footnotevalues, "\n"
       )
-      if (aquastat_file_run_interactively) {
+      if (LandInG_setup$landuse$aquastat_file_run_interactively) {
         choice <- readline(
           paste(
             "Your options: \"k\"eep value (suggested default action) or",
@@ -907,30 +977,46 @@ for (r in aquastat_datarows) {
       # Check if new name is already in aquastat_array, otherwise add crop
       if (!newcrop %in% dimnames(aquastat_array)[[2]]) {
         cat("Adding crop type", sQuote(newcrop), "to aquastat_array\n")
-        aquastat_array <- abind(
+        aquastat_array <- abind::abind(
           aquastat_array,
           array(
-            dim = c(dim(aquastat_array)[1], 1, dim(aquastat_array)[3]),
+            dim = c(
+              country = dim(aquastat_array)["country"],
+              item = 1,
+              time = dim(aquastat_array)["time"]
+            ),
             dimnames = list(
-              dimnames(aquastat_array)[[1]],
-              newcrop,
-              dimnames(aquastat_array)[[3]]
+              country = dimnames(aquastat_array)[["country"]],
+              item = newcrop,
+              time = dimnames(aquastat_array)[["time"]]
             )
           ),
           along = 2
         )
-        aquastat_metadata <- abind(
+        # Restore dimension naming after abind.
+        dn <- dimnames(aquastat_array)
+        names(dim(aquastat_array)) <- c("country", "item", "time")
+        names(dn) <- c("country", "item", "time")
+        dimnames(aquastat_array) <- dn
+
+        aquastat_metadata <- abind::abind(
           aquastat_metadata,
           array(
-            dim = c(dim(aquastat_array)[1], 1, dim(aquastat_array)[3]),
+            dim = c(
+              country = dim(aquastat_array)["country"],
+              item = 1,
+              time = dim(aquastat_array)["time"]
+            ),
             dimnames = list(
-              dimnames(aquastat_array)[[1]],
-              newcrop,
-              dimnames(aquastat_array)[[3]]
+              country = dimnames(aquastat_array)[["country"]],
+              item = newcrop,
+              time = dimnames(aquastat_array)[["time"]]
             )
           ),
           along = 2
         )
+        names(dim(aquastat_metadata)) <- c("country", "item", "time")
+        dimnames(aquastat_metadata) <- dn
       }
       # Set new crop name
       crop <- newcrop
@@ -948,12 +1034,12 @@ for (r in aquastat_datarows) {
     cat(
       sQuote(
         paste(
-          ud.convert(
+          units::ud_convert(
             aquastat_rawdata[r, val_col],
-            aquastat_area_source_units,
-            aquastat_area_units
+            LandInG_setup$landuse$aquastat_area_source_units,
+            LandInG_setup$landuse$aquastat_area_units
           ),
-          aquastat_area_units
+          LandInG_setup$landuse$aquastat_area_units
         )
       ),
       "for crop", sQuote(crop), "in", sQuote(country), "and year", year, "\n"
@@ -962,10 +1048,10 @@ for (r in aquastat_datarows) {
   if (choice != "d") {
     # Put value from aquastat_rawdata into aquastat_array
     aquastat_array[country, crop, format(year, scientific = FALSE)] <-
-      ud.convert(
+      units::ud_convert(
         aquastat_rawdata[r, val_col],
-        aquastat_area_source_units,
-        aquastat_area_units
+        LandInG_setup$landuse$aquastat_area_source_units,
+        LandInG_setup$landuse$aquastat_area_units
       )
   }
 }
@@ -974,19 +1060,30 @@ for (r in aquastat_datarows) {
 
 ################################################################################
 ## Save data to aquastat_rdata (defined in landuse_setup.R) for further use   ##
-aquastat_aquastat_file_run_interactively <- aquastat_file_run_interactively
-aquastat_file_used <- aquastat_file
+aquastat_env <- new.env()
+for (val in c("aquastat_file_run_interactively", "aquastat_file")) {
+  aquastat_env[[val]] <- LandInG_setup$landuse[[val]]
+}
+aquastat_env$aquastat_read_used <- "legacy"
+aquastat_env$LandInG_version <- LandInG_setup$LandInG_version
+for (val in c("aquastat_array", "aquastat_countries", "aquastat_metadata")) {
+  aquastat_env[[val]] <- get(val)
+}
 cat(
   "Saving Aquastat data 'aquastat_array', interactive vs. automatic mode,",
   "and information about choices made based on additional metadata",
-  "'aquastat_metadata' to file", sQuote(aquastat_rdata), "\n"
+  "'aquastat_metadata' to file",
+  sQuote(LandInG_setup$landuse$aquastat_rdata), "\n"
 )
 save(
   aquastat_array,
   aquastat_metadata,
-  aquastat_aquastat_file_run_interactively,
-  aquastat_file_used,
+  aquastat_file_run_interactively,
+  aquastat_file,
   aquastat_countries,
-  file = aquastat_rdata
+  aquastat_read_used,
+  LandInG_version,
+  file = LandInG_setup$landuse$aquastat_rdata,
+  envir = aquastat_env
 )
 ################################################################################

@@ -5,6 +5,10 @@ This file describes the AQUASTAT data used by the toolbox.
 AQUASTAT is released by the Food and Agriculture Organization of the United
 Nations (FAO).
 
+** Inportant note: ** The following instructions refer to the AQUASTAT website
+at the time of the initial LandInG release. In the meantime the download
+interface has changed. An update is in progress.
+
 ## Input
 AQUASTAT data can be downloaded from: 
 http://www.fao.org/aquastat/statistics/query/index.html

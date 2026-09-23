@@ -18,7 +18,12 @@
 
 ################################################################################
 ## FAO country mapping                                                        ##
-fao_mirca_country_mapping <- list(
+# LandInG_setup should normally be included/set up in landuse_setup.R
+if (!exists("LandInG_setup")) {
+  LandInG_setup <- new.env()
+  LandInG_setup$landuse$fix_cyprus <- FALSE
+}
+LandInG_setup$landuse$fao_mirca_country_mapping <- list(
   "Afghanistan" = 4000,
   "Albania" = 8000,
   "Algeria" = 12000,
@@ -323,14 +328,16 @@ fao_mirca_country_mapping <- list(
 ## update mapping.                                                            ##
 ## Since HYDE currently uses FAOSTAT cropland for "Cyprus" for all of Cyprus  ##
 ## even after 1974, option to not fix FAOSTAT.                                ##
-if (!exists("fix_cyprus")) {
-   # Should normally be set in landuse_setup.R
-  fix_cyprus <- FALSE
+if (is.null(LandInG_setup$landuse$fix_cyprus)) {
+  # Should normally be set in landuse_setup.R.
+  LandInG_setup$landuse$fix_cyprus <- FALSE
 }
-if (fix_cyprus) {
-  fao_gadm_country_mapping[["Cyprus_Northern"]] <- integer(0)
+if (LandInG_setup$landuse$fix_cyprus) {
+  LandInG_setup$landuse$fao_mirca_country_mapping[["Cyprus_Northern"]] <-
+    integer(0)
   # Not individual unit in MIRCA
-  fao_gadm_country_mapping[["Cyprus_Southern"]] <- integer(0)
+  LandInG_setup$landuse$fao_mirca_country_mapping[["Cyprus_Southern"]] <-
+    integer(0)
   # Not individual unit in MIRCA
 }
 ################################################################################
@@ -339,7 +346,7 @@ if (fix_cyprus) {
 ################################################################################
 ## MIRCA region mapping                                                       ##
 ## Region names as used in GADM version 3.6.                                  ##
-fao_mirca_region_mapping <- list(
+LandInG_setup$landuse$fao_mirca_region_mapping <- list(
   "Australia" = list(
     "Ashmore and Cartier Islands" = integer(0),
     # Not individual unit in MIRCA, outlying islands; not included in HYDE

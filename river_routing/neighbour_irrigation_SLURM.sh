@@ -1,13 +1,14 @@
 #!/bin/bash
-#SBATCH --ntasks=48
-#SBATCH --cpus-per-task=2 # 5arcmin requires up to 7GB RAM per CPU
+#SBATCH --ntasks=8 # scales well with 64 CPUs at 5 arcmin, less for 0.5°
+#SBATCH --cpus-per-task=1
+###SBATCH --mem-per-cpu=10G # 5arcmin requires up to 10GB RAM per CPU, less for 0.5°
 #SBATCH --qos=short
 #SBATCH --export=ALL
 #SBATCH --account=lpjml
 #SBATCH --comment="neighbour irrigation"
 #SBATCH --output=neighbour_irrigation_%j.out
 #SBATCH --error=neighbour_irrigation_%j.err
-#SBATCH --mail-type=END
+#SBATCH --mail-type=END,FAIL
 #SBATCH --job-name=neighbour_irrigation
 
 ################################################################################
@@ -20,11 +21,9 @@
 ################################################################################
 
 ulimit -c unlimited
-export I_MPI_PMI_LIBRARY=/p/system/slurm/lib/libpmi.so
+if [ -d /p/system/lenovo/ctt ]; then
+  # Load modules for PIK 2024 high-performance computer
+  source ../R_env_PIK.sh
+fi
 
-module load R/3.6.2
-module load intel/2018.1
-
-export R_LIBS=/p/projects/lpjml/R.3.6.2/library # must match with R module selected above
-
-srun --propagate R --no-save --file=neighbour_irrigation.R --silent --slave
+mpirun Rscript --vanilla neighbour_irrigation.R

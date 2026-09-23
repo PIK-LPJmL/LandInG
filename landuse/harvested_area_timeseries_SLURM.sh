@@ -1,14 +1,14 @@
 #!/bin/bash
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
-#SBATCH --partition=largemem
+#SBATCH --mem=15G
 #SBATCH --qos=medium
 #SBATCH --export=ALL
 #SBATCH --account=lpjml
 #SBATCH --comment="create harvested area time series"
 #SBATCH --output=harvested_area_timeseries_%j.out
 #SBATCH --error=harvested_area_timeseries_%j.err
-#SBATCH --mail-type=END
+#SBATCH --mail-type=END,FAIL
 #SBATCH --job-name="create harvested area time series"
 
 ################################################################################
@@ -20,20 +20,15 @@
 ## Contact: https://github.com/PIK-LPJmL/LandInG/                             ##
 ################################################################################
 
-start_year=1900
+start_year=2000
 end_year=2017
 
 
 ulimit -c unlimited
 
-module load R/3.6.2
-module load intel/2018.1
-module load netcdf-c/4.2.1.1/serial
-module load udunits/2.2.19
-module load geos/3.6.1
-module load proj4/5.2.0
-module load gdal/2.4.0
+if [ -d /p/system/lenovo/ctt ]; then
+  # Load modules for PIK 2024 high-performance computer
+  source ../R_env_PIK.sh
+fi
 
-export R_LIBS=/p/projects/lpjml/R.3.6.2/library # Must match with R module selected above
-
-R --no-save --file=harvested_area_timeseries.R --silent --slave --args start_year=$start_year end_year=$end_year
+Rscript --vanilla harvested_area_timeseries.R --args start_year=$start_year end_year=$end_year

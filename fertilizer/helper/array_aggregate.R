@@ -30,7 +30,7 @@ aggregate_array <- function(indata, fact, fun = "sum", verbose = TRUE) {
     dim(indata) <- c(dim(indata), 1)
     add_dim <- TRUE
   }
-  # Make sure there is always  and aggregation factor in x and y direction
+  # Make sure there is always an aggregation factor in x and y direction
   if (length(fact) == 1)
     fact <- rep(fact, 2)
   # Check that specified aggregation function is valid

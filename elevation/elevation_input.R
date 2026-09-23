@@ -8,8 +8,8 @@
 ################################################################################
 
 ################################################################################
-## This script creates an LPJmL input file containing median elevation above  ##
-## above sea level.                                                           ##
+## This script creates an LPJmL input file containing median or meam          ##
+## elevation above above sea level.                                           ##
 ## Technical note: elevation is implemented as an integer in LPJmL so values  ##
 ## will be rounded to integer values before saving to file.                   ##
 ################################################################################
@@ -63,53 +63,36 @@ elevation_headername <- "LPJELEV"                                             ##
 ################################################################################
 
 ################################################################################
-## Helper functions for LPJmL input format                                    ##
-## The script lpjml_format_helper_functions.R is saved in the parent          ##
-## directory by default.                                                      ##
+## Helper functions for LPJmL input format and basic LandInG setup.           ##
+## The script landing_setup.R is saved in the parent directory by default.    ##
 ################################################################################
-if (file.exists("../lpjml_format_helper_functions.R")) {
-  source("../lpjml_format_helper_functions.R")
-} else {
-  stop("Please update path to script with LPJmL input format helper function")
+if (file.exists("../landing_setup.R")) {
+  source("../landing_setup.R", chdir = TRUE)
+} else if (!exists("LandInG_setup") || !is.environment(LandInG_setup)) {
+  stop("Please update path to script with LandInG setup script")
 }
 
 ################################################################################
-## Load required packages. These may need to be installed first.              ##
+## Check for required R packages. These may need to be installed first.       ##
+if (!"terra" %in% .packages(all.available = TRUE)) {
+  stop("Please install required package 'terra'")
+}
 ################################################################################
-library(raster)
 
 ################################################################################
 ## Read LPJmL grid.                                                           ##
 if (gridformat == "BIN") {
-  # Read file header
-  # Function read_header() defined in lpjml_format_helper_functions.R
-  gridheader <- read_header(gridname)
-  # Open file for reading
-  gridfile <- file(gridname, "rb")
-  # Skip over file header
-  # Function get_headersize() defined in lpjml_format_helper_functions.R
-  seek(gridfile, get_headersize(gridheader))
-  # Read data
-  # Function get_datatype() defined in lpjml_format_helper_functions.R
-  griddata <- matrix(
-    readBin(
-      gridfile,
-      what = get_datatype(gridheader)$type,
-      size = get_datatype(gridheader)$size,
-      n = gridheader$header["nbands"] * gridheader$header["ncell"],
-      endian = gridheader$endian
-    ) * gridheader$header["scalar"],
-    ncol = gridheader$header["nbands"],
-    byrow = TRUE,
-    dimnames = list(NULL, c("lon", "lat"))
-  )
-  close(gridfile)
-  # Derive resolution from file header
-  lpj_res <- gridheader$header[c("cellsize_lon", "cellsize_lat")]
-  names(lpj_res) <- colnames(griddata)
+  # lpjmlkit package provides functionality to read in a file in LPJmL format
+  # including metadata about the file.
+  griddata <- lpjmlkit::read_grid(gridname)
+  # Derive resolution from file metadata
+  lpj_res <- c(griddata$meta$cellsize_lon, griddata$meta$cellsize_lat)
+  names(lpj_res) <- dimnames(griddata)$band
+  # Extract data and discard metadata
+  griddata <- griddata$data
 } else if (gridformat == "CSV") {
   griddata <- read.csv(gridname)
-  if (ncol(griddata) != 2 || any(!colnames(griddata) %in% c("lon", "lat"))) {
+  if (ncol(griddata) != 2 || any(colnames(griddata) != c("lon", "lat"))) {
     stop("gridname must contain a CSV table with two colums 'lon' and 'lat'")
   }
 } else {
@@ -122,31 +105,41 @@ cat(
   sep = ""
 )
 # Derive grid extent
-gridextent <- extent(
+gridextent <- terra::ext(
   min(griddata[, "lon"]) - lpj_res["lon"] / 2,
   max(griddata[, "lon"]) + lpj_res["lon"] / 2,
   min(griddata[, "lat"]) - lpj_res["lat"] / 2,
   max(griddata[, "lat"]) + lpj_res["lat"] / 2
 )
-gridraster <- raster(gridextent, res = lpj_res[c("lon", "lat")])
+gridraster <- terra::rast(
+  extent = gridextent,
+  resolution = lpj_res[c("lon", "lat")]
+)
 ################################################################################
 
 ################################################################################
 ## Determine elevation output file name based on grid resolution.             ##
 tmp_res <- unique(
-  ifelse(lpj_res[c("lon", "lat")] < 1/60, 3600, 60) * lpj_res[c("lon", "lat")]
+  ifelse(lpj_res[c("lon", "lat")] < 1 / 60, 3600, 60) * lpj_res[c("lon", "lat")]
 )
 lpj_res_string <- paste(
   round(tmp_res),
-  unique(ifelse(lpj_res[c("lon", "lat")] < 1/60, "arcsec", "arcmin")),
+  unique(ifelse(lpj_res[c("lon", "lat")] < 1 / 60, "arcsec", "arcmin")),
   sep = "", collapse = "_by_"
 )
 rm(tmp_res)
+gadm_version <- unlist(
+  regmatches(basename(gridname), regexec("gadm[0-9]*", basename(gridname)))
+)
 elevationname <- file.path(
   getwd(),
   paste0(
     "elevation_",
-    ifelse(grepl("gadm", basename(gridname)), "gadm_", ""),
+    ifelse(
+      length(gadm_version) == 1 && nchar(gadm_version) > 0,
+      paste0(gadm_version, "_"),
+      ""
+    ),
     lpj_res_string,
     ".",
     tolower(elevationformat)
@@ -164,25 +157,38 @@ if (file.exists(elevationname)) {
 
 ################################################################################
 ## Load elevation source raster.                                              ##
-elevation_raster <- raster(elevation_source_name)
+elevation_raster <- terra::rast(elevation_source_name)
 cat(
   "Elevation source file: ", elevation_source_name,
-  " (resolution: [", toString(res(elevation_raster)), "])\n",
+  " (resolution: [", toString(terra::res(elevation_raster)), "])\n",
   sep = ""
 )
+# Confirm that data have 1 band.
+if (terra::nlyr(elevation_raster) != 1) {
+  stop(
+    "Elevation source file: ", elevation_source_name,
+    "has ", terra::nlyr(elevation_raster), " bands. Expecting 1."
+  )
+}
 # Check that resolution is valid.
-elevation_to_lpj <- round(lpj_res[c("lon", "lat")] / res(elevation_raster), 4)
+elevation_to_lpj <- round(
+  lpj_res[c("lon", "lat")] / terra::res(elevation_raster),
+  4
+)
 if (any(elevation_to_lpj != 1)) {
   stop(
     paste0(
       "LPJmL resolution [", toString(lpj_res[c("lon", "lat")]), "] ",
-      "does not match elevation raster [",  toString(res(elevation_raster)), "]"
+      "does not match elevation raster [",
+      toString(terra::res(elevation_raster)), "]"
     )
   )
 }
 # Check that elevation raster and LPJml grid are aligned correctly
-diff_x <- abs(xmin(elevation_raster) - xmin(gridextent)) / xres(elevation_raster)
-diff_y <- abs(ymin(elevation_raster) - ymin(gridextent)) / yres(elevation_raster)
+diff_x <- abs(terra::xmin(elevation_raster) - terra::xmin(gridextent)) /
+  terra::xres(elevation_raster)
+diff_y <- abs(terra::ymin(elevation_raster) - terra::ymin(gridextent)) /
+  terra::yres(elevation_raster)
 if ((diff_x %% 1) > 1e-2 || (diff_y %% 1) > 1e-2) {
   stop(
     paste(
@@ -197,7 +203,7 @@ if ((diff_x %% 1) > 1e-2 || (diff_y %% 1) > 1e-2) {
 ################################################################################
 ## Extract cells included in grid from elevation_raster.                      ##
 # First check that all grid cells are covered by source data.
-raster_to_grid <- cellFromXY(elevation_raster, griddata)
+raster_to_grid <- terra::cellFromXY(elevation_raster, griddata)
 if (anyNA(raster_to_grid)) {
   stop(
     paste(
@@ -208,7 +214,7 @@ if (anyNA(raster_to_grid)) {
   )
 }
 # Now extract data only for grid cells.
-elevation_data <- elevation_raster[raster_to_grid]
+elevation_data <- unlist(elevation_raster[raster_to_grid])
 if (anyNA(elevation_data)) {
   cat(
     "Setting", length(which(is.na(elevation_data))),
@@ -222,9 +228,11 @@ if (anyNA(elevation_data)) {
 if (elevationformat == "BIN") {
   # Create file header
   if (bintype < 3 && lpj_res["lon"] != lpj_res["lat"]) {
-    stop("Only bintype 3 allows for longitude and latitude resolution to differ.")
+    stop(
+      "Only bintype 3 allows for longitude and latitude resolution to differ."
+    )
   }
-  elevation_header <- create_header(
+  elevation_header <- lpjmlkit::create_header(
     name = elevation_headername,
     version = bintype,
     order = 1,
@@ -237,20 +245,22 @@ if (elevationformat == "BIN") {
     datatype = 1
   )
   # Write header to file
-  write_header(elevationname, elevation_header)
+  lpjmlkit::write_header(elevationname, elevation_header)
   # Add data
-  zz <- file(elevationname, "ab")
-  if (typeof(get_datatype(elevation_header)$type) == "integer") {
+  fp <- file(elevationname, "ab")
+  if (typeof(lpjmlkit::get_datatype(elevation_header)$type) == "integer") {
     writeBin(
-      as.integer(round(elevation_data / elevation_header$header["scalar"])), zz,
-      size = get_datatype(elevation_header)$size,
+      as.integer(round(elevation_data / elevation_header$header["scalar"])), fp,
+      size = lpjmlkit::get_datatype(elevation_header)$size,
       endian = elevation_header$endian
     )
-  } else if (typeof(get_datatype(elevation_header)$type) == "double") {
+  } else if (
+    typeof(lpjmlkit::get_datatype(elevation_header)$type) == "double"
+  ) {
     writeBin(
       # Remove round() here if floating point values are supported
-      as.double(round(elevation_data / elevation_header$header["scalar"])), zz,
-      size = get_datatype(elevation_header)$size,
+      as.double(round(elevation_data / elevation_header$header["scalar"])), fp,
+      size = lpjmlkit::get_datatype(elevation_header)$size,
       endian = elevation_header$endian
     )
   } else {
@@ -261,13 +271,15 @@ if (elevationformat == "BIN") {
       )
     )
   }
-  close(zz)
+  close(fp)
   cat("File", elevationname, "created\n")
 } else if (elevationformat == "CSV") {
   write.csv(
-    matrix(round(elevation_data),
-    ncol = 1,
-    dimnames = list(NULL, "elevation")),
+    matrix(
+      round(elevation_data),
+      ncol = 1,
+      dimnames = list(NULL, "elevation")
+    ),
     file = elevationname,
     row.names = FALSE
   )

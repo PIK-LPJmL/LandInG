@@ -32,7 +32,7 @@ if (nchar(glwd_dir) > 0) {
 }
 ## Grid file:                                                                 ##
 ## Must be in LPJmL input format.                                             ##
-gridname <- "ENTER_GRID_FILE_HERE"
+gridname <- stop("ENTER_GRID_FILE_HERE")
 ##                                                                            ##
 ## GLWD Level 1 and 2                                                         ##
 ## Shape files per level                                                      ##
@@ -45,7 +45,7 @@ glwd_classes <- c(lakes = "Lake", rivers = "River")
 version_string <- "polygon-based"
 ## Output format: Either "BIN" (native LPJmL input format with header), "RAW" ##
 ## (LPJmL input format without header) or any raster format supported by the  ##
-## raster package, such as "NC" or "ASC". Note: Formats "RAW" and "BIN" with  ##
+## terra package, such as "NC" or "ASC". Note: Formats "RAW" and "BIN" with   ##
 ## with version < 3 will round fractions to full percent.                     ##
 output_format <- "BIN"
 ## Version of "BIN" format used. Only version 3 allows for longitude and      ##
@@ -58,22 +58,52 @@ headername <- "LPJLAKE"
 ################################################################################
 
 ################################################################################
-## Helper functions for LPJmL input format                                    ##
-## The script lpjml_format_helper_functions.R is saved in the parent          ##
-## directory by default.                                                      ##
+## Helper functions for LPJmL input format and basic LandInG setup.           ##
+## The script landing_setup.R is saved in the parent directory by default.    ##
 ################################################################################
-if (file.exists("../lpjml_format_helper_functions.R")) {
-  source("../lpjml_format_helper_functions.R")
-} else {
-  stop("Please update path to script with LPJmL input format helper function")
+if (file.exists("../landing_setup.R")) {
+  source("../landing_setup.R", chdir = TRUE)
+} else if (!exists("LandInG_setup") || !is.environment(LandInG_setup)) {
+  stop("Please update path to script with LandInG setup script")
 }
 
 ################################################################################
-## Load required R packages. These may need to be installed first.            ##
-library(raster)
-library(rgdal)
-library(sf)
-library(lwgeom)
+## Check for availability of required packages. These may need to be          ##
+## installed first.                                                           ##
+required_packages <- c("sf", "terra", "foreach")
+if (!all(required_packages %in% .packages(all.available = TRUE))) {
+  stop(
+    "Please install missing package(s): ",
+    toString(
+      sQuote(
+        setdiff(required_packages, .packages(all.available = TRUE)),
+        q = FALSE
+      )
+    )
+  )
+}
+# Note: Starting with version 1.0 package "sf" by default uses the new package
+# "s2" for spherical geometry, i.e. when doing calculations on spatial objects
+# in a geographical coordinate reference system. Because of this, results differ
+# from earlier versions of "sf". However, shapefiles are not necessarily created
+# in a way that they work correctly with spherical geometry leading to polygon
+# errors. Therefore, LandInG switches off use of "s2" in "sf" by default. This
+# may also help with comparability to data processed with "sf" version < 1.0.
+# Re-enable at your own risk.
+if ("sf_use_s2" %in% getNamespaceExports("sf")) {
+  sf::sf_use_s2(FALSE)
+}
+
+# Check if function st_make_valid is available in package sf, otherwise try
+# lwgeom package. Package lwgeom is also required if sf_use_s2() is FALSE.
+if (
+  !"st_make_valid" %in% getNamespaceExports("sf") ||
+    ("sf_use_s2" %in% getNamespaceExports("sf") && !sf::sf_use_s2())
+) {
+  if (!"lwgeom" %in% .packages(all.available = TRUE)) {
+    stop("Please install missing 'lwgeom' package")
+  }
+}
 ################################################################################
 
 ################################################################################
@@ -93,12 +123,12 @@ cluster <- TRUE
 parallel_mpi <- parallel_local <- FALSE # Not to be set by user
 if (cluster) {
   # Try parallelization
-  if (require(Rmpi)) {
+  if ("Rmpi" %in% .packages(all.available = TRUE)) {
     # Rmpi = R implementation of MPI interface
     # This is intended for parallelization on high-performance cluster.
-    if (require(doMPI)) {
+    if ("doMPI" %in% .packages(all.available = TRUE)) {
       # doMPI = interface for foreach construct to run in MPI parallel mode
-       # Start MPI cluster (link R instances together)
+      # Start MPI cluster (link R instances together)
       cl <- doMPI::startMPIcluster()
       # Number of R instances linked together
       num_cluster <- doMPI::clusterSize(cl)
@@ -111,7 +141,7 @@ if (cluster) {
       } else {
         # Only one task
         # Tell foreach to use sequential mode
-        registerDoSEQ()
+        foreach::registerDoSEQ()
         cat("Running in sequential mode because only one node is available.\n")
         num_cluster <- 1
       }
@@ -123,11 +153,11 @@ if (cluster) {
         call. = FALSE,
         immediate. = TRUE
       )
-      registerDoSEQ() # Tell foreach to use sequential mode
+      foreach::registerDoSEQ() # Tell foreach to use sequential mode
       cat("Falling back to running in sequential mode.\n")
       num_cluster <- 1
     }
-  } else if (require(doParallel)) {
+  } else if ("doParallel" %in% .packages(all.available = TRUE)) {
     # Try parallelization through parallel package.
     # This is probably more suitable to run in parallel on a local machine
     # Get number of CPU cores
@@ -145,12 +175,12 @@ if (cluster) {
       # Start cluster on local machine
       cl <- parallel::makeCluster(num_cluster)
       # Tell foreach to use this cluster
-      registerDoParallel(num_cluster)
+      doParallel::registerDoParallel(cl)
       parallel_local <- TRUE
       cat("Running in parallel mode on", num_cluster, "CPUs\n")
     } else {
       # Only one task
-      registerDoSEQ() # Tell foreach to use sequential mode
+      foreach::registerDoSEQ() # Tell foreach to use sequential mode
       cat("Running in sequential mode because only one CPU is available.\n")
     }
   } else {
@@ -162,14 +192,13 @@ if (cluster) {
       call. = FALSE,
       immediate. = TRUE
     )
-    registerDoSEQ() # Tells foreach to use sequential mode
+    foreach::registerDoSEQ() # Tells foreach to use sequential mode
     cat("Falling back to running in sequential mode.\n")
     num_cluster <- 1
   }
 } else {
   # Do not try parallelization
-  library(foreach)
-  registerDoSEQ() # Tells foreach to use sequential mode
+  foreach::registerDoSEQ() # Tells foreach to use sequential mode
   cat("Running in sequential mode.\n")
   num_cluster <- 1
 }
@@ -182,16 +211,16 @@ if (cluster) {
 ps <- "+proj=longlat +datum=WGS84 +ellps=WGS84 +towgs84=0,0,0"
 load_glwd <- function(glwd1_name, glwd2_name, ps, att_only = FALSE) {
   cat("Load GLWD Level 1 data from", sQuote(glwd1_name), "\n")
-  glwd1_shape <- st_read(glwd1_name, quiet = TRUE)
-  if (is.na(crs(glwd1_shape))) {
+  glwd1_shape <- sf::st_read(glwd1_name, quiet = TRUE)
+  if (is.na(sf::st_crs(glwd1_shape))) {
     # Assume longlat WGS84
-    st_crs(glwd1_shape) <- ps
+    sf::st_crs(glwd1_shape) <- ps
   }
   cat("Load GLWD Level 2 data from", sQuote(glwd2_name), "\n")
-  glwd2_shape <- st_read(glwd2_name, quiet = TRUE)
-  if (is.na(crs(glwd2_shape))) {
+  glwd2_shape <- sf::st_read(glwd2_name, quiet = TRUE)
+  if (is.na(sf::st_crs(glwd2_shape))) {
     # Assume longlat WGS84
-    st_crs(glwd2_shape) <- ps
+    sf::st_crs(glwd2_shape) <- ps
   }
   # Combine level 1 and 2 (select only ID and TYPE attributes)
   glwd_combined <- rbind(
@@ -208,7 +237,7 @@ load_glwd <- function(glwd1_name, glwd2_name, ps, att_only = FALSE) {
     )
   }
   # Check for invalid polygons (self-intersection)
-  invalid <- which(!st_is_valid(glwd_combined))
+  invalid <- which(!sf::st_is_valid(glwd_combined))
   if (length(invalid) > 0 && !att_only) {
     warning(
       "There are ", length(invalid),
@@ -216,9 +245,13 @@ load_glwd <- function(glwd1_name, glwd2_name, ps, att_only = FALSE) {
       call. = FALSE,
       immediate. = TRUE
     )
-    glwd_combined[invalid, ] <- st_make_valid(glwd_combined[invalid, ])
+    if ("st_make_valid" %in% getNamespaceExports("sf")) {
+      glwd_combined[invalid, ] <- sf::st_make_valid(glwd_combined[invalid, ])
+    } else {
+      glwd_combined[invalid, ] <- lwgeom::st_make_valid(glwd_combined[invalid, ])
+    }
     # Check again
-    invalid <- which(!st_is_valid(glwd_combined))
+    invalid <- which(!sf::st_is_valid(glwd_combined))
     if (length(invalid) > 0) {
       warning(
         length(invalid),
@@ -231,7 +264,7 @@ load_glwd <- function(glwd1_name, glwd2_name, ps, att_only = FALSE) {
   # Return combined dataset
   if (att_only) {
     # Only return attribute table without geometry
-    glwd_combined <-  st_drop_geometry(glwd_combined)
+    glwd_combined <-  sf::st_drop_geometry(glwd_combined)
     gc(reset = TRUE)
   }
   glwd_combined
@@ -240,54 +273,45 @@ load_glwd <- function(glwd1_name, glwd2_name, ps, att_only = FALSE) {
 
 ################################################################################
 ## Load grid file.                                                            ##
-## Functions read_header(), get_headersize(), get_datatype(), cellarea()      ##
-## defined in lpjml_format_helper_functions.R                                 ##
 cat("Load grid from", sQuote(gridname), "\n")
-gridheader <- read_header(gridname)
-gridfile <- file(gridname, "rb")
-seek(gridfile, get_headersize(gridheader))
-griddata <- matrix(
-  readBin(
-    gridfile,
-    what = get_datatype(gridheader)$type,
-    size = get_datatype(gridheader)$size,
-    n = gridheader$header["nbands"] * gridheader$header["ncell"],
-    endian = gridheader$endian
-  ) * gridheader$header["scalar"],
-  ncol = gridheader$header["nbands"],
-  byrow = TRUE,
-  dimnames = list(NULL, c("lon", "lat"))
-)
-gridarea <- cellarea(
+gridheader <- lpjmlkit::read_header(gridname)
+griddata <- lpjmlkit::read_grid(gridname, silent = TRUE)$data
+gridarea <- lpjmlkit::calc_cellarea(
   griddata[, "lat"],
   gridheader$header["cellsize_lon"],
-  gridheader$header["cellsize_lat"]
+  gridheader$header["cellsize_lat"],
+  earth_radius = LandInG_setup$earthradius,
+  return_unit = "m2"
 )
-close(gridfile)
 # Create grid raster from coordinates
-gridextent <- extent(
+gridextent <- terra::ext(
   min(griddata[, "lon"]) - gridheader[["header"]]["cellsize_lon"] / 2,
   max(griddata[, "lon"]) + gridheader[["header"]]["cellsize_lon"] / 2,
   min(griddata[, "lat"]) - gridheader[["header"]]["cellsize_lat"] / 2,
   max(griddata[, "lat"]) + gridheader[["header"]]["cellsize_lat"] / 2
 )
-gridraster <- raster(
+gridraster <- terra::rast(
   gridextent,
-  resolution = gridheader$header[c("cellsize_lon", "cellsize_lat")]
+  resolution = gridheader$header[c("cellsize_lon", "cellsize_lat")],
+  crs = ps
 )
-# Set projection
-proj4string(gridraster) <- ps
 # Try to correct numerical inaccuracies of grid settings
-if (all(
-  (1 / gridheader$header[c("cellsize_lon", "cellsize_lat")]) %% 1 < 1e-6 |
-  (1 / gridheader$header[c("cellsize_lon", "cellsize_lat")]) %% 1 > (1 - 1e-6)
-)) {
-  res(gridraster) <- 1 / round(
+if (
+  all(
+    (1 / gridheader$header[c("cellsize_lon", "cellsize_lat")]) %% 1 < 1e-6 |
+      (1 / gridheader$header[c("cellsize_lon", "cellsize_lat")]) %% 1 >
+        (1 - 1e-6)
+  )
+) {
+  terra::res(gridraster) <- 1 / round(
     1 / gridheader$header[c("cellsize_lon", "cellsize_lat")]
   )
-  extent(gridraster) <- alignExtent(
-    extent(gridraster),
-    raster(extent(-180, 180, -90, 90), res = res(gridraster))
+  terra::ext(gridraster) <- terra::align(
+    terra::ext(gridraster),
+    terra::rast(
+      terra::ext(-180, 180, -90, 90),
+      resolution = terra::res(gridraster)
+    )
   )
 }
 # Determine resolution string to be used in files created by this script
@@ -346,12 +370,17 @@ if (length(grep("lake|river", names(glwd_classes), ignore.case = TRUE)) == 2) {
         )
       }
     } else if (output_format == "BIN") {
-      outputheader <- read_header(outputname)
-      if (outputheader$header["ncell"] != gridheader$header["ncell"] ||
-        any(
-          outputheader$header[c("cellsize_lon", "cellsize_lat")] !=
-          gridheader$header[c("cellsize_lon", "cellsize_lat")]
-        )) {
+      outputheader <- lpjmlkit::read_header(outputname)
+      if (
+        outputheader$header["ncell"] != gridheader$header["ncell"] ||
+          !isTRUE(
+            all.equal(
+              outputheader$header[c("cellsize_lon", "cellsize_lat")],
+              gridheader$header[c("cellsize_lon", "cellsize_lat")],
+              tolerance = LandInG_setup$single.eps
+            )
+          )
+      ) {
         stop(
           "Output file ", sQuote(outputname),
           " exists already but does not match grid file ", sQuote(gridname),
@@ -395,12 +424,17 @@ for (type in names(glwd_classes)) {
         )
       }
     } else if (output_format == "BIN") {
-      outputheader <- read_header(outputname)
-      if (outputheader$header["ncell"] != gridheader$header["ncell"] ||
-        any(
-          outputheader$header[c("cellsize_lon", "cellsize_lat")] !=
-          gridheader$header[c("cellsize_lon", "cellsize_lat")]
-        )) {
+      outputheader <- lpjmlkit::read_header(outputname)
+      if (
+        outputheader$header["ncell"] != gridheader$header["ncell"] ||
+          !isTRUE(
+            all.equal(
+              outputheader$header[c("cellsize_lon", "cellsize_lat")],
+              gridheader$header[c("cellsize_lon", "cellsize_lat")],
+              tolerance = LandInG_setup$single.eps
+            )
+          )
+      ) {
         stop(
           "Output file ", sQuote(outputname),
           " exists already but does not match grid file ", sQuote(gridname),
@@ -421,14 +455,18 @@ for (type in names(glwd_classes)) {
   }
 }
 # Assign grid indices to grid
-gridraster[cellFromXY(gridraster, griddata)] <-
+gridraster[terra::cellFromXY(gridraster, griddata)] <-
   seq_len(gridheader$header["ncell"])
 names(gridraster) <- "GridcellID"
+# Wrap gridraster for sending it to parallel nodes
+gridraster_wrapped <- terra::wrap(gridraster)
 ################################################################################
 
 ################################################################################
 ## Generate a polygon intersection for each type of water body in             ##
 ## glwd_classes.                                                              ##
+# Make %dopar% from foreach package available.
+library(foreach)
 for (type in seq_along(glwd_classes)) {
   cat("Water body type", sQuote(glwd_classes[type]), "\n")
   # Load GLWD data
@@ -445,13 +483,6 @@ for (type in seq_along(glwd_classes)) {
     # Do in chunks to reduce memory requirements
     # Also, the current version of sf is extremely slow if trying to intersect
     # lakes with a global shape of grid cell polygons.
-    if (exists("sf_use_s2")) {
-      # You may switch off spherical geometry (s2) in newer versions of sf to
-      # emulate the behaviour of older versions. There seem to be some
-      # differences in processing speed as well. Uncomment the following line to
-      # switch off s2 functionality.
-      # sf_use_s2(FALSE)
-    }
     # Extract polygons for type from glwd_combined
     type_polygons <- glwd_combined[type_index, ]
     # Clean up before hand-off to parallel tasks
@@ -466,21 +497,33 @@ for (type in seq_along(glwd_classes)) {
     }
     # Time execution
     start <- proc.time()["elapsed"]
-    type_intersection <- foreach(
+    if (parallel_local || parallel_mpi) {
+      # Options cannot be exported to parallel tasks automatically, set
+      # explicitly
+      sf_use_s2 <- options("sf_use_s2")
+    }
+    intersection_loop <- foreach::foreach(
       r = seq(1, length(type_index), by = step),
       .inorder = FALSE,
       .combine = rbind,
       .verbose = FALSE,
-      .noexport = "glwd_combined",
+      .noexport = c("glwd_combined", "gridraster"),
       .multicombine = TRUE
     ) %dopar% {
-    # Previously used classic for loop
-    # for (r in seq(1, nrow(type_polygons), by = step)) {
+      # Previously used classic for loop
+      # for (r in seq(1, length(type_index), by = step)) {
       # Clean up type_intersection in foreach loop
       # Note: registerDoMPI and registerDoParallel appear to slightly differ in
       # terms of persistence of variables within parallel loops.
       if (exists("type_intersection")) {
         rm(type_intersection)
+      }
+      # Unwrap gridraster in parallel nodes
+      if (!exists("gridraster")) {
+        gridraster <- terra::unwrap(gridraster_wrapped)
+      }
+      if (exists("sf_use_s2") && !is.null(sf_use_s2)) {
+        options(sf_use_s2)
       }
       # Indices of water bodies processed in this loop iteration
       index <- seq(r, min(r + step - 1, nrow(type_polygons)))
@@ -499,30 +542,31 @@ for (type in seq_along(glwd_classes)) {
         }
         in_chunk <- c(in_chunk, w)
         # Derive spatial extent of water body
-        type_box <- st_bbox(type_polygons[w, ])
+        type_box <- sf::st_bbox(type_polygons[w, ])
         # Expand by buffer
         lower <- grep("min", names(type_box))
         upper <- grep("max", names(type_box))
-        type_box[lower] <- type_box[lower] - max(res(gridraster)) / 2
-        type_box[upper] <- type_box[upper] + max(res(gridraster)) / 2
+        type_box[lower] <- type_box[lower] - max(terra::res(gridraster)) / 2
+        type_box[upper] <- type_box[upper] + max(terra::res(gridraster)) / 2
         # Crop gridraster to water body
-        type_extent <- extent(type_box[c("xmin", "xmax", "ymin", "ymax")])
-        type_raster <- crop(gridraster, type_extent, snap = "out")
+        type_extent <- terra::ext(type_box[c("xmin", "xmax", "ymin", "ymax")])
+        type_raster <- terra::crop(gridraster, type_extent, snap = "out")
         # Convert cropped raster into polygon
         if (exists("type_grid_polygons")) {
           # If polygon exists already only convert cells with IDs not in polygon
           # yet
-          done <- which(values(type_raster) %in% type_grid_polygons$GridcellID)
+          done <- which(
+            terra::values(type_raster) %in% type_grid_polygons$GridcellID
+          )
           type_raster[done] <- NA
           # Convert to polygons
-          if (any(!is.na(values(type_raster)))) {
-            tmp_polygons <- rasterToPolygons(type_raster)
+          if (any(!is.na(terra::values(type_raster)))) {
             # Convert to sf object
-            tmp_polygons <- as(tmp_polygons, "sf")
+            tmp_polygons <- sf::st_as_sf(terra::as.polygons(type_raster))
             # Add cellarea
             tmp_polygons <- cbind(
               tmp_polygons,
-              GridcellArea = st_area(tmp_polygons)
+              GridcellArea = sf::st_area(tmp_polygons)
             )
             # Append to existing type_grid_polygons
             type_grid_polygons <- rbind(
@@ -531,58 +575,61 @@ for (type in seq_along(glwd_classes)) {
               deparse.level = 0
             )
           }
-        } else if (any(!is.na(values(type_raster)))) {
-          tmp_polygons <- rasterToPolygons(type_raster)
+        } else if (any(!is.na(terra::values(type_raster)))) {
           # Convert to sf object
-          type_grid_polygons <- as(tmp_polygons, "sf")
+          tmp_polygons <- sf::st_as_sf(terra::as.polygons(type_raster))
           # Add cellarea
           type_grid_polygons <- cbind(
-            type_grid_polygons,
-            GridcellArea = st_area(type_grid_polygons)
+            tmp_polygons,
+            GridcellArea = sf::st_area(tmp_polygons)
           )
           rm(tmp_polygons)
         }
         # If using sf with spherical geometry do polygon intersection for each
         # water body separately.
-        if (#exists("sf_use_s2") && sf_use_s2() &&
+        if (
           exists("type_grid_polygons") &&
-          (nrow(type_grid_polygons) > 1000 || w == final_w ||
-            length(in_chunk) >= 50)
+            (
+              nrow(type_grid_polygons) > 1000 || w == final_w ||
+                length(in_chunk) >= 50
+            )
         ) {
           if (!exists("type_intersection")) {
-            if (exists("sf_use_s2")) {
-              type_intersection <- st_intersection(
+            if ("sf_use_s2" %in% getNamespaceExports("sf") && sf::sf_use_s2()) {
+              # sf versions with s2 functionality allow passing additional
+              # options to s2. Limit returned geometry to polygons (and disallow
+              # points and polylines).
+              type_intersection <- sf::st_intersection(
                 type_grid_polygons,
                 type_polygons[in_chunk, ],
                 dimension = "polygon"
               )
-              # "dimension" parameter only available in sf version with s2
-              # support
             } else {
-              type_intersection <- st_intersection(
+              type_intersection <- sf::st_intersection(
                 type_grid_polygons,
                 type_polygons[in_chunk, ]
               )
             }
           } else {
-            if (exists("sf_use_s2")) {
-              tmp_intersection <- st_intersection(
+            if ("sf_use_s2" %in% getNamespaceExports("sf") && sf::sf_use_s2()) {
+              tmp_intersection <- sf::st_intersection(
                 type_grid_polygons,
                 type_polygons[in_chunk, ],
                 dimension = "polygon"
               )
             } else {
-              tmp_intersection <- st_intersection(
+              tmp_intersection <- sf::st_intersection(
                 type_grid_polygons,
                 type_polygons[in_chunk, ]
               )
             }
-            if (nrow(tmp_intersection) > 0)
+            if (nrow(tmp_intersection) > 0) {
               type_intersection <- rbind(
                 type_intersection,
                 tmp_intersection,
                 deparse.level = 0
               )
+            }
             rm(tmp_intersection)
           }
           rm(type_grid_polygons)
@@ -600,67 +647,84 @@ for (type in seq_along(glwd_classes)) {
       round(proc.time()["elapsed"] -  start), "seconds.\n"
     )
 
-    # Check for invalid polygons (self-intersection)
-    invalid <- which(!st_is_valid(type_intersection))
-    if (length(invalid) > 0) {
-      warning(
-        "There are ", length(invalid),
-        " invalid polygons in intersection. Trying to fix.",
-        call. = FALSE,
-        immediate. = TRUE
-      )
-      type_intersection[invalid, ] <- st_make_valid(type_intersection[invalid, ])
-      # Check again
-      invalid <- which(!st_is_valid(type_intersection))
+    if (length(intersection_loop) > 0) {
+      # Check for invalid polygons (self-intersection)
+      invalid <- which(!sf::st_is_valid(intersection_loop))
       if (length(invalid) > 0) {
         warning(
-          length(invalid),
-          " invalid polygons in intersection could not be fixed.",
+          "There are ", length(invalid),
+          " invalid polygons in intersection. Trying to fix.",
+          call. = FALSE,
+          immediate. = TRUE
+        )
+        if ("st_make_valid" %in% getNamespaceExports("sf")) {
+          intersection_loop[invalid, ] <-
+            sf::st_make_valid(intersection_loop[invalid, ])
+        } else {
+          intersection_loop[invalid, ] <-
+            lwgeom::st_make_valid(intersection_loop[invalid, ])
+        }
+        # Check again
+        invalid <- which(!sf::st_is_valid(intersection_loop))
+        if (length(invalid) > 0) {
+          warning(
+            length(invalid),
+            " invalid polygons in intersection could not be fixed.",
+            call. = FALSE,
+            immediate. = TRUE
+          )
+        }
+      }
+      # Add polygon areas
+      intersection_loop <- cbind(
+        intersection_loop,
+        PolygonArea = sf::st_area(intersection_loop)
+      )
+      # Remove polygons with area == 0
+      valid <- which(as.double(intersection_loop$PolygonArea) > 0)
+      intersection_loop <- intersection_loop[valid, ]
+      # Vector with cell fractions covered by water body type
+      type_fraction <- double(gridheader$header["ncell"])
+      # First assign values in cells with only one water body
+      tmptable <- data.frame(table(intersection_loop$GridcellID))
+      tmptable$Var1 <- as.integer(as.character(tmptable$Var1))
+      grid_index <- which(
+        intersection_loop$GridcellID %in%
+          tmptable$Var1[which(tmptable$Freq == 1)]
+      )
+      type_fraction[intersection_loop$GridcellID[grid_index]] <- as.double(
+        intersection_loop$PolygonArea / intersection_loop$GridcellArea
+      )[grid_index]
+      for (cell in tmptable$Var1[which(tmptable$Freq > 1)]) {
+        grid_index <- which(intersection_loop$GridcellID == cell)
+        type_fraction[cell] <- as.double(
+          sum(
+            intersection_loop$PolygonArea[grid_index] /
+              intersection_loop$GridcellArea[grid_index]
+          )
+        )
+      }
+      if (any(type_fraction > 1.00001)) {
+        warning(
+          length(which(type_fraction > 1.00001)),
+          " cells exceed a cell fraction of 1. Maximum value: ",
+          max(type_fraction),
+          ". Setting to 1.",
           call. = FALSE,
           immediate. = TRUE
         )
       }
-    }
-    # Add polygon areas
-    type_intersection <- cbind(
-      type_intersection,
-      PolygonArea = st_area(type_intersection)
-    )
-    # Remove polygons with area == 0
-    valid <- which(as.double(type_intersection$PolygonArea) > 0)
-    type_intersection <- type_intersection[valid, ]
-    # Vector with cell fractions covered by water body type
-    type_fraction <- double(gridheader$header["ncell"])
-    # First assign values in cells with only one water body
-    tmptable <- data.frame(table(type_intersection$GridcellID))
-    tmptable$Var1 <- as.integer(as.character(tmptable$Var1))
-    grid_index <- which(
-      type_intersection$GridcellID %in% tmptable$Var1[which(tmptable$Freq == 1)]
-    )
-    type_fraction[type_intersection$GridcellID[grid_index]] <- as.double(
-      type_intersection$PolygonArea / type_intersection$GridcellArea
-    )[grid_index]
-    for (cell in tmptable$Var1[which(tmptable$Freq > 1)]) {
-      grid_index <- which(type_intersection$GridcellID == cell)
-      type_fraction[cell] <- as.double(
-        sum(
-          type_intersection$PolygonArea[grid_index] /
-            type_intersection$GridcellArea[grid_index]
-        )
-      )
-    }
-    if (any(type_fraction > 1.00001)) {
+      type_fraction[which(type_fraction > 1)] <- 1
+    } else {
       warning(
-        length(which(type_fraction > 1.00001)),
-        " cells exceed a cell fraction of 1. Maximum value: ",
-        max(type_fraction),
-        ". Setting to 1.",
-        call. = FALSE,
-        immediate. = TRUE
+        "No intersection between grid cells and water body type ",
+        sQuote(glwd_classes[type]),
+        "\nCheck for possible errors.",
+        immediate. = TRUE, call. = FALSE
       )
+      type_fraction <- double(gridheader$header["ncell"])
     }
-    type_fraction[which(type_fraction > 1)] <- 1
-    rm(type_intersection)
+    rm(intersection_loop)
   } else {
     # Vector with cell fractions covered by water body type (all values set
     # to 0)
@@ -722,7 +786,7 @@ if (length(grep("lake|river", names(glwd_classes), ignore.case = TRUE)) == 2) {
       datatype <- 3
       scalar <- 1
     }
-    outputheader <- create_header(
+    outputheader <- lpjmlkit::create_header(
       name = headername,
       version = ifelse(output_format == "RAW", 0, bintype),
       nyear = 1,
@@ -734,25 +798,25 @@ if (length(grep("lake|river", names(glwd_classes), ignore.case = TRUE)) == 2) {
       datatype = datatype
     )
     if (output_format == "BIN") {
-      write_header(outputname, outputheader)
+      lpjmlkit::write_header(outputname, outputheader)
       outputfile <- file(outputname, "ab")
     } else {
       outputfile <- file(outputname, "wb")
     }
-    if (typeof(get_datatype(outputheader)$type) == "raw") {
+    if (typeof(lpjmlkit::get_datatype(outputheader)$type) == "raw") {
       writeBin(as.raw(round(lakes_and_river_fraction / scalar)), outputfile)
-    } else if (typeof(get_datatype(outputheader)$type) == "integer") {
+    } else if (typeof(lpjmlkit::get_datatype(outputheader)$type) == "integer") {
       writeBin(
         as.integer(round(lakes_and_river_fraction / scalar)),
         outputfile,
-        size = get_datatype(outputheader)$size,
+        size = lpjmlkit::get_datatype(outputheader)$size,
         endian = outputheader$endian
       )
-    } else if (typeof(get_datatype(outputheader)$type) == "double") {
+    } else if (typeof(lpjmlkit::get_datatype(outputheader)$type) == "double") {
       writeBin(
         as.double(lakes_and_river_fraction / scalar),
         outputfile,
-        size = get_datatype(outputheader)$size,
+        size = lpjmlkit::get_datatype(outputheader)$size,
         endian = outputheader$endian
       )
     } else {
@@ -763,17 +827,26 @@ if (length(grep("lake|river", names(glwd_classes), ignore.case = TRUE)) == 2) {
     }
     close(outputfile)
   } else {
-    # Assume output_format is a raster format supported by raster package
-    outputraster <- raster(gridraster)
-    outputraster[cellFromXY(outputraster, griddata)] <- lakes_and_river_fraction
-    # The following will fail if output_format is not supported by the raster
+    # Assume output_format is a raster format supported by terra package
+    outputraster <- terra::rast(gridraster)
+    outputraster[terra::cellFromXY(outputraster, griddata)] <-
+      lakes_and_river_fraction
+    # The following will fail if output_format is not supported by the terra
     # package
-    writeRaster(
-      outputraster,
-      filename = outputname,
-      varname = "lakes_and_rivers_frac",
-      longname = "cell fraction covered by lakes and rivers"
-    )
+    if (grepl(".nc[0-9]*$", outputname)) {
+      terra::writeCDF(
+        outputraster,
+        filename = outputname,
+        varname = "lakes_and_rivers_frac",
+        longname = "cell fraction covered by lakes and rivers",
+        unit = "1"
+      )
+    } else {
+      terra::writeRaster(
+        outputraster,
+        filename = outputname
+      )
+    }
   }
 }
 ################################################################################
@@ -806,7 +879,7 @@ for (type in names(glwd_classes)) {
       datatype <- 3
       scalar <- 1
     }
-    outputheader <- create_header(
+    outputheader <- lpjmlkit::create_header(
       name = headername,
       version = ifelse(output_format == "RAW", 0, bintype),
       nyear = 1,
@@ -818,25 +891,25 @@ for (type in names(glwd_classes)) {
       datatype = datatype
     )
     if (output_format == "BIN") {
-      write_header(outputname, outputheader)
+      lpjmlkit::write_header(outputname, outputheader)
       outputfile <- file(outputname, "ab")
     } else {
       outputfile <- file(outputname, "wb")
     }
-    if (typeof(get_datatype(outputheader)$type) == "raw") {
+    if (typeof(lpjmlkit::get_datatype(outputheader)$type) == "raw") {
       writeBin(as.raw(round(lpj_type_frac / scalar)), outputfile)
-    } else if (typeof(get_datatype(outputheader)$type) == "integer") {
+    } else if (typeof(lpjmlkit::get_datatype(outputheader)$type) == "integer") {
       writeBin(
         as.integer(round(lpj_type_frac / scalar)),
         outputfile,
-        size = get_datatype(outputheader)$size,
+        size = lpjmlkit::get_datatype(outputheader)$size,
         endian = outputheader$endian
       )
-    } else if (typeof(get_datatype(outputheader)$type) == "double") {
+    } else if (typeof(lpjmlkit::get_datatype(outputheader)$type) == "double") {
       writeBin(
         as.double(lpj_type_frac / scalar),
         outputfile,
-        size = get_datatype(outputheader)$size,
+        size = lpjmlkit::get_datatype(outputheader)$size,
         endian = outputheader$endian
       )
     } else {
@@ -847,17 +920,25 @@ for (type in names(glwd_classes)) {
     }
     close(outputfile)
   } else {
-    # Assume output_format is a raster format supported by raster package
-    outputraster <- raster(gridraster)
-    outputraster[cellFromXY(outputraster, griddata)] <- lpj_type_frac
-    # The following will fail if output_format is not supported by the raster
+    # Assume output_format is a raster format supported by terra package
+    outputraster <- terra::rast(gridraster)
+    outputraster[terra::cellFromXY(outputraster, griddata)] <- lpj_type_frac
+    # The following will fail if output_format is not supported by the terra
     # package
-    writeRaster(
-      outputraster,
-      filename = outputname,
-      varname = paste0(type, "_frac"),
-      longname = paste("cell fraction covered by", type)
-    )
+    if (grepl(".nc[0-9]*$", outputname)) {
+      terra::writeCDF(
+        outputraster,
+        filename = outputname,
+        varname = paste0(type, "_frac"),
+        longname = paste("cell fraction covered by", type),
+        unit = "1"
+      )
+    } else {
+      terra::writeRaster(
+        outputraster,
+        filename = outputname
+      )
+    }
   }
 }
 ################################################################################

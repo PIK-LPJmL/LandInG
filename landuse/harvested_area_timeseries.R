@@ -60,12 +60,12 @@ if (length(commandArgs(trailingOnly = TRUE)) > 0) {
       "Parameter start_year provided as command line argument:",
       start_year, "\n"
     )
-    if (start_year < min(output_period)) {
+    if (start_year < min(LandInG_setup$landuse$output_period)) {
       # Cannot exceed output_period.
-      start_year <- min(output_period)
+      start_year <- min(LandInG_setup$landuse$output_period)
     }
   } else {
-    start_year <- min(output_period)
+    start_year <- min(LandInG_setup$landuse$output_period)
   }
   if (any(grepl("end_year", commandArgs(trailingOnly = TRUE)))) {
     end_year <- strsplit(
@@ -76,9 +76,9 @@ if (length(commandArgs(trailingOnly = TRUE)) > 0) {
       grep("end_year", unlist(end_year), invert = TRUE, value = TRUE)
     )
     cat("Parameter end_year provided as command line argument:", end_year, "\n")
-    if (end_year > max(output_period)) {
+    if (end_year > max(LandInG_setup$landuse$output_period)) {
       # Cannot exceed output_period.
-      end_year <- max(output_period)
+      end_year <- max(LandInG_setup$landuse$output_period)
     }
     if (end_year < start_year) {
       stop(
@@ -88,11 +88,11 @@ if (length(commandArgs(trailingOnly = TRUE)) > 0) {
       )
     }
   } else {
-    end_year <- max(output_period)
+    end_year <- max(LandInG_setup$landuse$output_period)
   }
 } else  {
-  start_year <- min(output_period)
-  end_year <- max(output_period)
+  start_year <- min(LandInG_setup$landuse$output_period)
+  end_year <- max(LandInG_setup$landuse$output_period)
 }
 ################################################################################
 
@@ -103,72 +103,185 @@ if (length(commandArgs(trailingOnly = TRUE)) > 0) {
 ## and run some consistency checks.                                           ##
 cat(
   "*** Loading country-level, crop-specific total and irrigated harvested",
-  "areas from", sQuote(ha_country_timeseries_RData), "***\n"
+  "areas from", sQuote(LandInG_setup$landuse$ha_country_timeseries_RData),
+  "***\n"
 )
-load(ha_country_timeseries_RData)
+country_env <- new.env()
+load(LandInG_setup$landuse$ha_country_timeseries_RData, envir = country_env)
 # Check all required variables have been loaded from RData file
 varcheck <- c(
-  irrigated_version_to_use,
-  total_version_to_use,
+  LandInG_setup$landuse$irrigated_version_to_use,
+  LandInG_setup$landuse$total_version_to_use,
   "ts_crops",
   "hyde_cropland_country_timeseries",
-  "hyde_irrigated_country_timeseries"
+  "hyde_irrigated_country_timeseries",
+  "landuse_array_expanded"
 )
-if (any(!varcheck %in% ls())) {
+if (any(!varcheck %in% names(country_env))) {
   stop(
-    "Variable(s) ", toString(sQuote(setdiff(varcheck, ls()))), " missing in ",
-    sQuote(harvested_area_country_timeseries_RData)
+    "Variable(s) ", toString(sQuote(setdiff(varcheck, names(country_env)))),
+    " missing in ",
+    sQuote(LandInG_setup$landuse$ha_country_timeseries_RData)
   )
 }
+# Consistency check
+if (is.null(country_env$LandInG_version)) {
+  country_env$LandInG_version <- "1.0.0"
+}
+if (country_env$LandInG_version != LandInG_setup$LandInG_version) {
+  warning(
+    "Imported data from split_global_harvested_areas_into_rainfed_irrigated.R",
+    " was generated with a different version of LandInG: ",
+    country_env$LandInG_version, " (imported) != ",
+    LandInG_setup$LandInG_version, " (current script)\n",
+    "Trying to fix. Consider re-running",
+    " split_global_harvested_areas_into_rainfed_irrigated.R.",
+    immediate. = TRUE, call. = FALSE
+  )
+  for (
+    chkvar in c(
+      LandInG_setup$landuse$irrigated_version_to_use,
+      LandInG_setup$landuse$total_version_to_use
+    )
+  ) {
+    if (is.null(names(dimnames(country_env[[chkvar]])))) {
+      dn <- dimnames(country_env[[chkvar]])
+      names(dim(country_env[[chkvar]])) <- names(dn) <-
+        c("country", "item", "time")
+      dimnames(country_env[[chkvar]]) <- dn
+    }
+  }
+  for (
+    chkvar in c(
+      "hyde_cropland_country_timeseries",
+      "hyde_irrigated_country_timeseries",
+      "hyde_gaez_max_ha_country_timeseries",
+      "hyde_gaez_max_ir_ha_country_timeseries",
+      "hyde_gaez_max_rf_ha_on_ir_country_timeseries",
+      "hyde_gaez_max_rf_ha_on_rf_country_timeseries"
+    )
+  ) {
+    if (
+      !is.null(country_env[[chkvar]]) &&
+        is.null(names(dimnames(country_env[[chkvar]])))
+    ) {
+      dn <- dimnames(country_env[[chkvar]])
+      names(dim(country_env[[chkvar]])) <- names(dn) <- c("country", "time")
+      dimnames(country_env[[chkvar]]) <- dn
+    }
+  }
+  if (is.null(names(dimnames(country_env$landuse_array_expanded)))) {
+    dn <- dimnames(country_env$landuse_array_expanded)
+    names(dim(country_env$landuse_array_expanded)) <- names(dn) <-
+      c("country", "item", "element", "time")
+    dimnames(country_env$landuse_array_expanded) <- dn
+  }
+}
+
 # Check that loaded data covers output_period
-years <- seq(min(output_period), max(output_period))
-if (any(!years %in% dimnames(get(irrigated_version_to_use))[[3]])) {
+years <- seq(
+  min(LandInG_setup$landuse$output_period),
+  max(LandInG_setup$landuse$output_period)
+)
+if (
+  any(
+    !years %in% dimnames(
+      country_env[[LandInG_setup$landuse$irrigated_version_to_use]]
+    )[["time"]]
+  )
+) {
   stop(
-    "Defined output_period (", paste(range(output_period), collapse = "-"),
-    ") is not fully covered by data in ", irrigated_version_to_use
+    "Defined output_period (",
+    paste(range(LandInG_setup$landuse$output_period), collapse = "-"),
+    ") is not fully covered by data in ",
+    LandInG_setup$landuse$irrigated_version_to_use
   )
 }
-if (any(!years %in% dimnames(get(total_version_to_use))[[3]])) {
+if (
+  any(
+    !years %in% dimnames(
+      country_env[[LandInG_setup$landuse$total_version_to_use]]
+    )[["time"]]
+  )
+) {
   stop(
-    "Defined output_period (", paste(range(output_period), collapse = "-"),
-    ") is not fully covered by data in ", total_version_to_use
+    "Defined output_period (",
+    paste(range(LandInG_setup$landuse$output_period), collapse = "-"),
+    ") is not fully covered by data in ",
+    LandInG_setup$landuse$total_version_to_use
   )
 }
 # Check that loaded data covers all ts_crops
-if (any(!ts_crops %in% dimnames(get(total_version_to_use))[[2]])) {
+if (
+  any(
+    !country_env$ts_crops %in% dimnames(
+      country_env[[LandInG_setup$landuse$total_version_to_use]]
+    )[["item"]]
+  )
+) {
   stop(
     "Crop(s) ",
     toString(
-      sQuote(setdiff(ts_crops, dimnames(get(total_version_to_use))[[2]]))
+      sQuote(
+        setdiff(
+          country_env$ts_crops,
+          dimnames(
+            country_env[[LandInG_setup$landuse$total_version_to_use]]
+          )[["item"]]
+        )
+      )
     ),
     " missing in ",
-    total_version_to_use
+    LandInG_setup$landuse$total_version_to_use
   )
 }
-if (any(!ts_crops %in% dimnames(get(irrigated_version_to_use))[[2]])) {
+if (
+  any(
+    !country_env$ts_crops %in% dimnames(
+      country_env[[LandInG_setup$landuse$irrigated_version_to_use]]
+    )[["item"]]
+  )
+) {
   stop(
     "Crop(s) ",
     toString(
-      sQuote(setdiff(ts_crops, dimnames(get(irrigated_version_to_use))[[2]]))
+      sQuote(
+        setdiff(
+          country_env$ts_crops,
+          dimnames(
+            country_env[[LandInG_setup$landuse$irrigated_version_to_use]]
+          )[["item"]]
+        )
+      )
     ),
     " missing in ",
-    irrigated_version_to_use
+    LandInG_setup$landuse$irrigated_version_to_use
   )
 }
 # Check that output_period does not exceed period covered by HYDE data
-if (min(output_period) < min(hyde_period) ||
-  max(output_period) > max(hyde_period)
+if (
+  min(LandInG_setup$landuse$output_period) <
+    min(LandInG_setup$landuse$hyde_period) ||
+    max(LandInG_setup$landuse$output_period) >
+      max(LandInG_setup$landuse$hyde_period)
 ) {
   stop(
-    "Some years of output_period ", paste(range(output_period), collapse = "-"),
+    "Some years of output_period ",
+    paste(range(LandInG_setup$landuse$output_period), collapse = "-"),
     " are outside the range of HYDE cropland data (",
-    paste(range(hyde_period), collapse = "-"), ")"
+    paste(range(LandInG_setup$landuse$hyde_period), collapse = "-"), ")"
   )
 }
 cat(
   "Country-level total harvested areas cover the range",
   paste(
-    range(as.integer(dimnames(get(total_version_to_use))[[3]])),
+    range(
+      as.integer(
+        dimnames(
+          country_env[[LandInG_setup$landuse$total_version_to_use]]
+        )[["time"]]
+      )
+    ),
     collapse = "-"
   ),
   "\n"
@@ -176,16 +289,25 @@ cat(
 cat(
   "Country-level irrigated harvested areas cover the range",
   paste(
-    range(as.integer(dimnames(get(irrigated_version_to_use))[[3]])),
+    range(
+      as.integer(
+        dimnames(
+          country_env[[LandInG_setup$landuse$irrigated_version_to_use]]
+        )[["time"]]
+      )
+    ),
     collapse = "-"
   ),
   "\n"
 )
 cat(
   "NetCDFs created for output period",
-  paste(range(output_period), collapse = "-"), "\n"
+  paste(range(LandInG_setup$landuse$output_period), collapse = "-"), "\n"
 )
-if (start_year > min(output_period) || end_year < max(output_period)) {
+if (
+  start_year > min(LandInG_setup$landuse$output_period) ||
+    end_year < max(LandInG_setup$landuse$output_period)
+) {
   cat(
     "Only years",
     paste(start_year, end_year, sep = "-"),
@@ -198,44 +320,51 @@ cat("*** Beginning processing of data ***\n")
 ## Load further required data and FAOSTAT definitions                         ##
 # FAO country mapping
 cat("Reading country definitions:\n")
-cat("FAO to GADM mapping:", toString(sQuote(fao_gadm_mapping_file)), "\n")
-for (filename in fao_gadm_mapping_file) {
+cat(
+  "FAO to GADM mapping:",
+  toString(sQuote(LandInG_setup$landuse$fao_gadm_mapping_file)),
+  "\n"
+)
+for (filename in LandInG_setup$landuse$fao_gadm_mapping_file) {
   source(filename)
 }
 cat(
   "FAO country definitions:",
   toString(
     sQuote(
-      c(fao_production_country_file, fao_production_country_group_file,
-        fao_landuse_country_file, fao_landuse_country_group_file)
+      c(LandInG_setup$landuse$fao_production_country_file,
+        LandInG_setup$landuse$fao_production_country_group_file,
+        LandInG_setup$landuse$fao_landuse_country_file,
+        LandInG_setup$landuse$fao_landuse_country_group_file
+      )
     )
   ),
   "\n"
 )
-fao_production_country_def <- fread(
-  fao_production_country_file,
+fao_production_country_def <- data.table::fread(
+  LandInG_setup$landuse$fao_production_country_file,
   na.strings = "...",
   # Avoid country code "NA" for Namibia to be mistaken for missing value
   check.names = TRUE,
   data.table = FALSE,
   header = TRUE
 )
-fao_production_country_group_def <- fread(
-  fao_production_country_group_file,
+fao_production_country_group_def <- data.table::fread(
+  LandInG_setup$landuse$fao_production_country_group_file,
   na.strings = "...",
   check.names = TRUE,
   data.table = FALSE,
   header = TRUE
 )
-fao_landuse_country_def <- fread(
-  fao_landuse_country_file,
+fao_landuse_country_def <- data.table::fread(
+  LandInG_setup$landuse$fao_landuse_country_file,
   na.strings = "...",
   check.names = TRUE,
   data.table = FALSE,
   header = TRUE
 )
-fao_landuse_country_group_def <- fread(
-  fao_landuse_country_group_file,
+fao_landuse_country_group_def <- data.table::fread(
+  LandInG_setup$landuse$fao_landuse_country_group_file,
   na.strings = "...",
   check.names = TRUE,
   data.table = FALSE,
@@ -246,11 +375,11 @@ fao_landuse_country_group_def <- fread(
 # ../gadm so make sure to run these first.
 cat(
   "Loading gridded GADM administrative unit data from",
-  toString(sQuote(c(gadmlevel_file))), "\n"
+  toString(sQuote(c(LandInG_setup$landuse$gadmlevel_file))), "\n"
 )
-gadmlevel_raster <- brick(gadmlevel_file)
+gadmlevel_raster <- terra::rast(LandInG_setup$landuse$gadmlevel_file)
 gadmlevel_names <- read.csv(
-  gadmlevel_names_file,
+  LandInG_setup$landuse$gadmlevel_names_file,
   stringsAsFactors = FALSE,
   comment.char = "#"
 )
@@ -264,67 +393,156 @@ rm(gadmlevel_names)
 cat(
   "Loading GAEZ multiple cropping suitability from",
   toString(
-    sQuote(c(gaez_multicropping_suit_ir_file, gaez_multicropping_suit_rf_file))
+    sQuote(
+      c(LandInG_setup$landuse$gaez_multicropping_suit_ir_file,
+        LandInG_setup$landuse$gaez_multicropping_suit_rf_file
+      )
+    )
   ),
   "\n"
 )
-gaez_multicropping_suit_ir <- raster(gaez_multicropping_suit_ir_file)
-gaez_multicropping_suit_rf <- raster(gaez_multicropping_suit_rf_file)
+gaez_multicropping_suit_ir <-
+  terra::rast(LandInG_setup$landuse$gaez_multicropping_suit_ir_file)
+gaez_multicropping_suit_rf <-
+  terra::rast(LandInG_setup$landuse$gaez_multicropping_suit_rf_file)
 # Set minimum cropping suitability to 1
 # -> Assume that any cropland according to HYDE cropland supports at least
 #    single cropping
 # -> Take care of differences in land mask
 # Replace NA by 1
-gaez_multicropping_suit_rf <- mask(
+gaez_multicropping_suit_rf <- terra::mask(
   gaez_multicropping_suit_rf,
   gaez_multicropping_suit_rf,
-  maskvalue = NA,
-  updatevalue = 1,
-  updateNA = TRUE
-)
-gaez_multicropping_suit_ir <- mask(
-  gaez_multicropping_suit_ir,
-  gaez_multicropping_suit_ir,
-  maskvalue = NA,
-  updatevalue = 1,
-  updateNA = TRUE
-)
-# Replace 0 by 1
-gaez_multicropping_suit_rf <- mask(
-  gaez_multicropping_suit_rf,
-  gaez_multicropping_suit_rf,
-  maskvalue = 0,
+  maskvalues = NA,
   updatevalue = 1
 )
-gaez_multicropping_suit_ir <- mask(
+gaez_multicropping_suit_ir <- terra::mask(
   gaez_multicropping_suit_ir,
   gaez_multicropping_suit_ir,
-  maskvalue = 0,
+  maskvalues = NA,
+  updatevalue = 1
+)
+# Replace 0 by 1
+gaez_multicropping_suit_rf <- terra::mask(
+  gaez_multicropping_suit_rf,
+  gaez_multicropping_suit_rf,
+  maskvalues = 0,
+  updatevalue = 1
+)
+gaez_multicropping_suit_ir <- terra::mask(
+  gaez_multicropping_suit_ir,
+  gaez_multicropping_suit_ir,
+  maskvalues = 0,
   updatevalue = 1
 )
 
 # Harvested fractions per crop (created by harvested_fraction.R)
 cat(
   "Using crop-specific harvested area shares from",
-  sQuote(harvested_fraction_filename), "\n"
+  sQuote(LandInG_setup$landuse$harvested_fraction_filename), "\n"
 )
-harvested_fraction_raster <- raster(harvested_fraction_filename, layer = 1)
-harvested_fraction_file <- nc_open(harvested_fraction_filename)
+harvested_fraction_raster <- terra::rast(
+  LandInG_setup$landuse$harvested_fraction_filename,
+  lyrs = 1
+)
+harvested_fraction_file <-
+  ncdf4::nc_open(LandInG_setup$landuse$harvested_fraction_filename)
 # Detect if vertical orientation needs to be flipped
 lats <- harvested_fraction_file$dim$lat$vals
-harvested_fraction_flip <-
-  (yFromRow(gadm_raster, 1) > yFromRow(gadm_raster, 2)) != (lats[1] > lats[2])
+harvested_fraction_flip <- (
+  terra::yFromRow(LandInG_setup$landuse$gadm_raster, 1) >
+    terra::yFromRow(LandInG_setup$landuse$gadm_raster, 2)
+) != (lats[1] > lats[2])
 # Check that all ts_crops are present in NetCDF file
-harvested_fraction_crops <- ncvar_get(harvested_fraction_file, "crop")
-if (any(!ts_crops %in% harvested_fraction_crops)) {
-  stop(
-    "Crop(s) ",
-    toString(sQuote(setdiff(ts_crops, harvested_fraction_crops))),
-    " missing in ",
-    sQuote(harvested_fraction_file)
+harvested_fraction_crops <-
+  ncdf4::ncvar_get(harvested_fraction_file, "crop")
+if (
+  is.null(ncdf4::ncatt_get(harvested_fraction_file, 0)$LandInG_version) ||
+    ncdf4::ncatt_get(harvested_fraction_file, 0)$LandInG_version !=
+      LandInG_setup$LandInG_version
+) {
+  warning(
+    sQuote(LandInG_setup$landuse$harvested_fraction_filename),
+    " has been generated by a different version of LandInG.\n",
+    "Consider creating it again using harvested_fraction.R to ensure",
+    " compatibility."
   )
 }
-
+if (any(!country_env$ts_crops %in% harvested_fraction_crops)) {
+  stop(
+    "Crop(s) ",
+    toString(sQuote(setdiff(country_env$ts_crops, harvested_fraction_crops))),
+    " missing in ",
+    sQuote(LandInG_setup$landuse$harvested_fraction_filename)
+  )
+}
+harvested_fraction_hastime <- any(
+  grepl(
+    "time",
+    names(harvested_fraction_file$dim),
+    ignore.case = TRUE
+  )
+)
+if (
+  length(LandInG_setup$landuse$mon_refyear) > 1 && !harvested_fraction_hastime
+) {
+  stop(
+    sQuote(LandInG_setup$landuse$harvested_fraction_filename),
+    " has no time dimension even though mon_refyear includes ",
+    length(LandInG_setup$landuse$mon_refyear), " years.",
+    "\nRun harvested_fraction.R to fix."
+  )
+}
+if (harvested_fraction_hastime) {
+  if (!grepl("years since", harvested_fraction_file$dim$time$units)) {
+    stop(
+      "Unexpected time unit string ",
+      sQuote(harvested_fraction_file$dim$time$units),
+      " in ", sQuote(LandInG_setup$landuse$harvested_fraction_filename)
+    )
+  }
+  tmpyear <- as.integer(
+    regmatches(
+      harvested_fraction_file$dim$time$units,
+      regexec(
+        "years since ([-]*[0-9]+)",
+        harvested_fraction_file$dim$time$units
+      )
+    )[[1]][2]
+  )
+  if (is.na(tmpyear)) {
+    stop(
+      "Cannot determine start year in ",
+      sQuote(LandInG_setup$landuse$harvested_fraction_filename),
+      " from time unit string ",  sQuote(harvested_fraction_file$dim$time$units)
+    )
+  }
+  if (
+    !all(
+      LandInG_setup$landuse$mon_refyear ==
+        (tmpyear + harvested_fraction_file$dim$time$vals)
+    )
+  ) {
+    stop(
+      sQuote(LandInG_setup$landuse$harvested_fraction_filename),
+      " does not cover all reference years: c(",
+      toString(tmpyear + harvested_fraction_file$dim$time$vals),
+      ") != c(", toString(LandInG_setup$landuse$mon_refyear), ")"
+    )
+  }
+} else {
+  warning(
+    sQuote(LandInG_setup$landuse$harvested_fraction_filename),
+    " does not have a time dimension. It should include a time dimension if",
+    " processed by harvested_fraction.R",
+    immediate. = TRUE, call. = FALSE
+  )
+}
+# TODO: Remove this check once code to interpolate/extrapolate patterns for
+# multiple mon_refyear has been added below.
+if (length(LandInG_setup$landuse$mon_refyear) > 1) {
+  stop("Multiple values for parameter mon_refyear are currently not supported")
+}
 # Check if extent and resolutions of various raster objects match
 varcheck <- c(
   "gadmlevel_raster",
@@ -335,28 +553,32 @@ varcheck <- c(
 for (rastercheck in varcheck) {
   tmpraster <- get(rastercheck)
   if (matching_extent(
-    extent(tmpraster),
+    terra::ext(tmpraster),
     global_extent,
-    xres(tmpraster),
-    yres(tmpraster)
+    terra::xres(tmpraster),
+    terra::yres(tmpraster)
   )) {
-    tmpraster <- setExtent(tmpraster, global_extent)
+    terra::ext(tmpraster) <- global_extent
   }
   assign(rastercheck, tmpraster)
   if (!matching_extent(
-    extent(gadm_raster),
-    extent(tmpraster),
-    xres(gadm_raster),
-    yres(gadm_raster)
+    terra::ext(LandInG_setup$landuse$gadm_raster),
+    terra::ext(tmpraster),
+    terra::xres(LandInG_setup$landuse$gadm_raster),
+    terra::yres(LandInG_setup$landuse$gadm_raster)
   )) {
     stop(
-      sQuote(gadmlevel_file), " and ", rastercheck,
+      sQuote(LandInG_setup$landuse$gadmlevel_file), " and ", rastercheck,
       " have different spatial extent"
     )
   }
-  if (any(res(gadm_raster) != res(tmpraster))) {
+  if (
+    any(
+      terra::res(LandInG_setup$landuse$gadm_raster) != terra::res(tmpraster)
+    )
+  ) {
     stop(
-      sQuote(gadmlevel_file), " and ", rastercheck,
+      sQuote(LandInG_setup$landuse$gadmlevel_file), " and ", rastercheck,
       " have different resolution"
     )
   }
@@ -365,15 +587,22 @@ for (rastercheck in varcheck) {
 rm(harvested_fraction_raster)
 
 # HYDE area
-hyde_is_fraction <- !ud.are.convertible(hyde_area_units, "m2")
+hyde_is_fraction <- !units::ud_are_convertible(
+  LandInG_setup$landuse$hyde_area_units,
+  "m2"
+)
 if (hyde_is_fraction) {
   # Load HYDE area at native resolution and do not aggregate to output
   # resolution (default settings in load_hyde_area() aggregate data)
   hyde_area <- load_hyde_area(
-    hyde_area_file,
-    unitraster = NULL
+    filename = LandInG_setup$landuse$hyde_area_file,
+    fileunits = LandInG_setup$landuse$hyde_area_file_units,
+    return_units = LandInG_setup$landuse$fao_area_units,
+    # Make sure to use same unit below
+    return_raster = NULL, # Keep native HYDE spatial resolution
+    earth_radius = LandInG_setup$earthradius,
+    gextent = global_extent
   )
-  hyde_area_file_units <- hyde_area$unit
   hyde_area <- hyde_area$area
 }
 
@@ -392,16 +621,16 @@ for (table in varcheck) {
   table_data <- get(table)
   for (c in colnames(table_data)) {
     if (typeof(table_data[, c]) == "character") {
-      if (!all(stri_enc_isascii(table_data[, c]), na.rm = TRUE)) {
+      if (!all(stringi::stri_enc_isascii(table_data[, c]), na.rm = TRUE)) {
         # String has non-ASCII characters
-        if (!all(stri_enc_isutf8(table_data[, c]), na.rm = TRUE)) {
+        if (!all(stringi::stri_enc_isutf8(table_data[, c]), na.rm = TRUE)) {
           # String has non-UTF8 characters -> assume windows-1252 encoding and
           # convert to UTF-8
           message(
             "Converting column ", sQuote(c),
             " from windows-1252 to UTF-8 encoding in ", table
           )
-          table_data[, c] <- stri_encode(
+          table_data[, c] <- stringi::stri_encode(
             table_data[, c],
             "windows-1252",
             "UTF-8"
@@ -413,8 +642,15 @@ for (table in varcheck) {
           "Converting column ", sQuote(c),
           " from UTF-8 to ASCII encoding in ", table
         )
-        table_data[, c] <- stri_encode(table_data[, c], "UTF-8", "UTF-8")
-        table_data[, c] <- stri_trans_general(table_data[, c], "latin-ascii")
+        table_data[, c] <- stringi::stri_encode(
+          table_data[, c],
+          "UTF-8",
+          "UTF-8"
+        )
+        table_data[, c] <- stringi::stri_trans_general(
+          table_data[, c],
+          "latin-ascii"
+        )
       }
     }
   }
@@ -432,21 +668,43 @@ clist <- rbind(
 )
 # Countries with end year
 index <- which(!is.na(clist$End.Year))
-if (length(setdiff(names(compound_countries), clist$Country[index])) > 0) {
+if (
+  length(
+    setdiff(
+      names(LandInG_setup$landuse$compound_countries),
+      clist$Country[index]
+    )
+  ) > 0
+) {
   # Compound_countries has countries not mentioned in fao_production_country_def
   # or fao_landuse_country_def, remove
-  for (c in setdiff(names(compound_countries), clist$Country[index])) {
-    compound_countries[[c]] <- NULL
+  for (
+    country in setdiff(
+      names(LandInG_setup$landuse$compound_countries),
+      clist$Country[index]
+    )
+  ) {
+    LandInG_setup$landuse$compound_countries[[country]] <- NULL
   }
 }
 # Check that successor countries actually exist in FAOSTAT data.
 # Note: Depending on the version, FAOSTAT may list countries as ceasing to exist
 # while not listing any successor countries.
-for (country in intersect(names(compound_countries), clist$Country[index])) {
-  country_mismatch <-  which(
-    is.na(match(compound_countries[[country]], clist$Country))
+for (
+  country in intersect(
+    names(LandInG_setup$landuse$compound_countries),
+    clist$Country[index]
   )
-  if (length(country_mismatch) == length(compound_countries[[country]])) {
+) {
+  country_mismatch <-  which(
+    is.na(
+      match(LandInG_setup$landuse$compound_countries[[country]], clist$Country)
+    )
+  )
+  if (
+    length(country_mismatch) ==
+      length(LandInG_setup$landuse$compound_countries[[country]])
+  ) {
     # All successor countries listed in compound_countries are missing in
     # FAOSTAT. Remove entry from compound_countries.
     warning(
@@ -457,18 +715,24 @@ for (country in intersect(names(compound_countries), clist$Country[index])) {
       immediate. = TRUE
     )
     # Remove country from compound_countries
-    compound_countries[[country]] <- NULL
+    LandInG_setup$landuse$compound_countries[[country]] <- NULL
   } else if (length(country_mismatch) > 0) {
     # Not all listed successor countries are available in FAOSTAT
-    for (country2 in compound_countries[[country]][country_mismatch]) {
+    for (
+      country2 in
+        LandInG_setup$landuse$compound_countries[[country]][country_mismatch]
+    ) {
       # Find potential duplicates
-      index2 <- match(country2, names(fao_gadm_country_mapping))
+      index2 <- match(
+        country2,
+        names(LandInG_setup$landuse$fao_gadm_country_mapping)
+      )
       dupl <- names(
         which(
           sapply(
-            fao_gadm_country_mapping[-index2],
+            LandInG_setup$landuse$fao_gadm_country_mapping[-index2],
             identical,
-            y = fao_gadm_country_mapping[[country2]]
+            y = LandInG_setup$landuse$fao_gadm_country_mapping[[country2]]
           )
         )
       )
@@ -485,10 +749,22 @@ for (country in intersect(names(compound_countries), clist$Country[index])) {
 }
 # Check for countries with endyear in FAOSTAT not listed in
 # fao_gadm_country_mapping
-if (length(setdiff(clist$Country[index], names(compound_countries))) > 0) {
+if (
+  length(
+    setdiff(
+      clist$Country[index],
+      names(LandInG_setup$landuse$compound_countries)
+    )
+  ) > 0
+) {
   # FAOSTAT has countries listed as ceasing to exist that are missing in
   # compound_countries
-  for (country in setdiff(clist$Country[index], names(compound_countries))) {
+  for (
+    country in setdiff(
+      clist$Country[index],
+      names(LandInG_setup$landuse$compound_countries)
+    )
+  ) {
     warning(
       sQuote(country), " is missing ",
       "in compound_countries but is listed as ceasing to exist in ",
@@ -507,13 +783,19 @@ if (length(setdiff(clist$Country[index], names(compound_countries))) > 0) {
 # Determine country groups based on fao_production_country_group_def and
 # fao_landuse_country_group_def
 fao_groups <- list()
-clist <- abind(
-  fao_production_country_def[, c("Country", "Country.Code")],
-  fao_production_country_group_def[, c("Country", "Country.Code")],
-  fao_production_country_group_def[, c("Country.Group", "Country.Group.Code")],
-  fao_landuse_country_group_def[, c("Country", "Country.Code")],
-  fao_landuse_country_group_def[, c("Country.Group", "Country.Group.Code")],
-  along = 1
+col1 <- c("Country", "Country.Code")
+col2 <- c("Country.Group", "Country.Group.Code")
+clist <- data.table::setDF(
+  # Temporarily convert to data.table because data.frames with different
+  # colnames cannot be merged using rbind.
+  rbind(
+    data.table::setDT(fao_production_country_def[, col1]),
+    data.table::setDT(fao_production_country_group_def[, col1]),
+    data.table::setDT(fao_production_country_group_def[, col2]),
+    data.table::setDT(fao_landuse_country_group_def[, col1]),
+    data.table::setDT(fao_landuse_country_group_def[, col2]),
+    use.names = FALSE
+  )
 )
 # All country group codes
 group_codes <- unique(
@@ -564,7 +846,7 @@ for (group_code in intersect(clist[, 2], group_codes)) {
   # fao_gadm_country_mapping
   fao_groups[[clist[index3, 1]]] <- intersect(
     group_country_names,
-    names(fao_gadm_country_mapping)
+    names(LandInG_setup$landuse$fao_gadm_country_mapping)
   )
   rm(index1, index2, index3)
 }
@@ -583,7 +865,12 @@ man_add <- list(
   "Saint-Martin (French Part)" = c("Americas", "Caribbean"),
   "Saint-Martin (French part)" = c("Americas", "Caribbean")
 )
-for (country in intersect(names(man_add), names(fao_gadm_country_mapping))) {
+for (
+  country in intersect(
+    names(man_add),
+    names(LandInG_setup$landuse$fao_gadm_country_mapping)
+  )
+) {
   for (group in intersect(man_add[[country]], names(fao_groups))) {
     message(
       "Manually adding ", sQuote(country),
@@ -595,13 +882,14 @@ for (country in intersect(names(man_add), names(fao_gadm_country_mapping))) {
 
 for (country in names(fao_groups)) {
   cat("Filling", sQuote(country), "in GADM country list\n")
-  fao_gadm_country_mapping[[country]] <- unique(
-    unlist(fao_gadm_country_mapping[fao_groups[[country]]])
+  LandInG_setup$landuse$fao_gadm_country_mapping[[country]] <- unique(
+    unlist(LandInG_setup$landuse$fao_gadm_country_mapping[fao_groups[[country]]])
   )
 }
 # Check for GADM countries not included in FAOSTAT
-mismatch <- which(!gadm_country_names$level0_code %in%
-  unlist(fao_gadm_country_mapping)
+mismatch <- which(
+  !gadm_country_names$level0_code %in%
+    unlist(LandInG_setup$landuse$fao_gadm_country_mapping)
 )
 if (length(mismatch) > 0) {
   cat(
@@ -609,10 +897,10 @@ if (length(mismatch) > 0) {
     toString(sQuote(gadm_country_names$country[mismatch])), "\n"
   )
   # Add GADM countries missing in FAOSTAT to group "World"
-  if ("World" %in% names(fao_gadm_country_mapping)) {
+  if ("World" %in% names(LandInG_setup$landuse$fao_gadm_country_mapping)) {
     cat("Adding them to FAO country group 'World'\n")
-    fao_gadm_country_mapping[["World"]] <- c(
-      fao_gadm_country_mapping[["World"]],
+    LandInG_setup$landuse$fao_gadm_country_mapping[["World"]] <- c(
+      LandInG_setup$landuse$fao_gadm_country_mapping[["World"]],
       gadm_country_names$level0_code[mismatch]
     )
   }
@@ -620,16 +908,23 @@ if (length(mismatch) > 0) {
 # Remove potential duplicates in fao_gadm_country_mapping.
 # There are some duplicates in fao_gadm_country_mapping.R because FAOSTAT
 # renamed some countries and we keep old names for backwards compatibility.
-for (country in setdiff(
-  names(fao_gadm_country_mapping),
-  dimnames(get(total_version_to_use))[[1]]
-)) {
-  index <- match(country, names(fao_gadm_country_mapping))
+for (
+  country in setdiff(
+    names(LandInG_setup$landuse$fao_gadm_country_mapping),
+    dimnames(
+      country_env[[LandInG_setup$landuse$total_version_to_use]]
+    )[["country"]]
+  )
+) {
+  index <- match(
+    country,
+    names(LandInG_setup$landuse$fao_gadm_country_mapping)
+  )
   dupl <- which(
     sapply(
-      fao_gadm_country_mapping[-index],
+      LandInG_setup$landuse$fao_gadm_country_mapping[-index],
       identical,
-      y = fao_gadm_country_mapping[[country]]
+      y = LandInG_setup$landuse$fao_gadm_country_mapping[[country]]
     )
   )
   if (length(dupl) > 0) {
@@ -638,17 +933,17 @@ for (country in setdiff(
       "from fao_gadm_country_mapping because it seems to be a duplicate of",
       toString(sQuote(names(dupl))), "\n"
     )
-    fao_gadm_country_mapping[[country]] <- NULL
+    LandInG_setup$landuse$fao_gadm_country_mapping[[country]] <- NULL
   }
 }
 # Now check again for duplicates
-for (country in names(fao_gadm_country_mapping)) {
-  index <- match(country, names(fao_gadm_country_mapping))
+for (country in names(LandInG_setup$landuse$fao_gadm_country_mapping)) {
+  index <- match(country, names(LandInG_setup$landuse$fao_gadm_country_mapping))
   dupl <- which(
     sapply(
-      fao_gadm_country_mapping[-index],
+      LandInG_setup$landuse$fao_gadm_country_mapping[-index],
       identical,
-      y = fao_gadm_country_mapping[[country]]
+      y = LandInG_setup$landuse$fao_gadm_country_mapping[[country]]
     )
   )
   if (length(dupl) > 0) {
@@ -663,12 +958,12 @@ for (country in names(fao_gadm_country_mapping)) {
 # Associate grid cells with countries
 cat("Associating GADM grid cells with FAO countries\n")
 fao_gadm_country_cells <- list()
-tmpcodes <- values(subset(gadmlevel_raster, 1))
-for (country in names(fao_gadm_country_mapping)) {
+tmpcodes <- terra::values(terra::subset(gadmlevel_raster, 1), mat = FALSE)
+for (country in names(LandInG_setup$landuse$fao_gadm_country_mapping)) {
   # Find country IDs used in  gadmlevel_raster.
   # Each country may consist of several GADM units.
   index1 <- match(
-    fao_gadm_country_mapping[[country]],
+    LandInG_setup$landuse$fao_gadm_country_mapping[[country]],
     gadm_country_names$level0_code
   )
   # Find cells with matching IDs.
@@ -683,10 +978,10 @@ rm(tmpcodes, gadmlevel_raster)
 ## Define aggregation functions used later                                    ##
 # These either sum all crops within a cell or all cells per crop in a country.
 cellsum <- function(country_data, na.rm = FALSE) {
-  return(rowSums(country_data, na.rm = na.rm))
+  rowSums(country_data, na.rm = na.rm)
 }
 countrysum <- function(country_data, na.rm = FALSE) {
-  return(colSums(country_data, na.rm = na.rm))
+  colSums(country_data, na.rm = na.rm)
 }
 ################################################################################
 
@@ -695,46 +990,14 @@ countrysum <- function(country_data, na.rm = FALSE) {
 ## Set up file for crop-specific timeseries of harvested areas                ##
 # Concatenate all possible version strings for file names
 file_version_string <- paste0(
-  ifelse(
-    exists("aquastat_version_string") && nchar(aquastat_version_string) > 0,
-    paste0("_", aquastat_version_string),
-    ""
-  ),
-  ifelse(
-    exists("fao_version_string") && nchar(fao_version_string) > 0,
-    paste0("_", fao_version_string),
-    ""
-  ),
-  ifelse(
-    exists("gadm_version_string") && nchar(gadm_version_string) > 0,
-    paste0("_", gadm_version_string),
-    ""
-  ),
-  ifelse(
-    exists("gaez_version_string") && nchar(gaez_version_string) > 0,
-    paste0("_", gaez_version_string),
-    ""
-  ),
-  ifelse(
-    exists("hyde_version_string") && nchar(hyde_version_string) > 0,
-    paste0("_", hyde_version_string),
-    ""
-  ),
-  ifelse(
-    exists("mirca_version_string") && nchar(mirca_version_string) > 0,
-    paste0("_", mirca_version_string),
-    ""
-  ),
-  ifelse(
-    exists("monfreda_version_string") && nchar(monfreda_version_string) > 0,
-    paste0("_", monfreda_version_string),
-    ""
-  ),
-  ifelse(
-    exists("ramankutty_version_string") && nchar(ramankutty_version_string) > 0,
-    paste0("_", ramankutty_version_string),
-    ""
-  )
+  add_version_string(LandInG_setup$landuse$aquastat_version_string),
+  add_version_string(LandInG_setup$landuse$fao_version_string),
+  add_version_string(LandInG_setup$landuse$gadm_version_string),
+  add_version_string(LandInG_setup$landuse$gaez_version_string),
+  add_version_string(LandInG_setup$landuse$hyde_version_string),
+  add_version_string(LandInG_setup$landuse$mirca_version_string),
+  add_version_string(LandInG_setup$landuse$mon_version_string),
+  add_version_string(LandInG_setup$landuse$ram_version_string)
 )
 # Set up NetCDF variables
 # Take over longitude and latitude dimensions from harvested_fraction_file
@@ -743,20 +1006,20 @@ lat_dim <- harvested_fraction_file$dim$lat
 # Character variables in NetCDF files are two-dimensional arrays of single
 # characters. Define both dimensions.
 # Number of characters in name string
-nchar_dim <- ncdim_def(
+nchar_dim <- ncdf4::ncdim_def(
   "nchar",
   units = "",
-  vals = seq_len(max(nchar(ts_crops))),
+  vals = seq_len(max(nchar(country_env$ts_crops))),
   create_dimvar = FALSE
 )
 # Number of name strings
-crop_dim <- ncdim_def(
+crop_dim <- ncdf4::ncdim_def(
   "crop",
   units = "",
-  vals = seq_along(ts_crops),
+  vals = seq_along(country_env$ts_crops),
   create_dimvar = FALSE
 )
-cropvar <- ncvar_def(
+cropvar <- ncdf4::ncvar_def(
   "crop",
   units = "",
   dim = list(nchar_dim, crop_dim),
@@ -768,15 +1031,15 @@ cropvar <- ncvar_def(
 # NetCDF files are created for the full output_period, not just the period given
 # given by start_year and end_year.
 chunk_start <- seq(
-  min(output_period),
-  max(output_period),
-  by = ha_timeseries_chunk_length
+  min(LandInG_setup$landuse$output_period),
+  max(LandInG_setup$landuse$output_period),
+  by = LandInG_setup$landuse$ha_timeseries_chunk_length
 )
-chunk_end <- chunk_start + ha_timeseries_chunk_length - 1
-chunk_end <- pmin(chunk_end, max(output_period))
+chunk_end <- chunk_start + LandInG_setup$landuse$ha_timeseries_chunk_length - 1
+chunk_end <- pmin(chunk_end, max(LandInG_setup$landuse$output_period))
 
 ha_timeseries_filenames <- paste0(
-  ha_timeseries_filename_base,
+  LandInG_setup$landuse$ha_timeseries_filename_base,
   "_", chunk_start, "-", chunk_end,
   file_version_string,
   ".nc"
@@ -784,19 +1047,22 @@ ha_timeseries_filenames <- paste0(
 # Names of variables in NetCDF file
 # Most of these are defined in landuse_setup.R
 nc_vars <- c(
-  rainfed_output_name,
-  irrigated_output_name,
-  rainfed_output_sum_name,
-  irrigated_output_sum_name,
-  total_output_sum_name,
+  LandInG_setup$landuse$rainfed_output_name,
+  LandInG_setup$landuse$irrigated_output_name,
+  LandInG_setup$landuse$rainfed_output_sum_name,
+  LandInG_setup$landuse$irrigated_output_sum_name,
+  LandInG_setup$landuse$total_output_sum_name,
   "year_processed"
 )
 for (fileindex in seq_along(ha_timeseries_filenames)) {
   # Time dimension is specific to each file
-  time_dim <- ncdim_def(
+  time_dim <- ncdf4::ncdim_def(
     "time",
-    units = paste0("years since ", min(output_period), "-01-01"),
-    vals = (chunk_start[fileindex]:chunk_end[fileindex]) - min(output_period),
+    units = paste0(
+      "years since ", min(LandInG_setup$landuse$output_period), "-01-01"
+    ),
+    vals = (chunk_start[fileindex]:chunk_end[fileindex]) -
+      min(LandInG_setup$landuse$output_period),
     unlim = TRUE
   )
   # If this script is run for only a subset of years from output_period files
@@ -805,9 +1071,9 @@ for (fileindex in seq_along(ha_timeseries_filenames)) {
   if (!file.exists(ha_timeseries_filenames[fileindex])) {
     cat("*** Creating", sQuote(ha_timeseries_filenames[fileindex]), "***\n")
     # Create crop-specific variables
-    rainfed_area_var <- ncvar_def(
-      rainfed_output_name,
-      units = fao_area_units,
+    rainfed_area_var <- ncdf4::ncvar_def(
+      LandInG_setup$landuse$rainfed_output_name,
+      units = LandInG_setup$landuse$fao_area_units,
       dim = list(lon_dim, lat_dim, crop_dim, time_dim),
       longname = "rainfed harvested area",
       missval = 1e30,
@@ -815,9 +1081,9 @@ for (fileindex in seq_along(ha_timeseries_filenames)) {
       prec = "double",
       compression = 5
     )
-    irrigated_area_var <- ncvar_def(
-      irrigated_output_name,
-      units = fao_area_units,
+    irrigated_area_var <- ncdf4::ncvar_def(
+      LandInG_setup$landuse$irrigated_output_name,
+      units = LandInG_setup$landuse$fao_area_units,
       dim = list(lon_dim, lat_dim, crop_dim, time_dim),
       longname = "irrigated harvested area",
       missval = 1e30,
@@ -826,9 +1092,9 @@ for (fileindex in seq_along(ha_timeseries_filenames)) {
       compression = 5
     )
     # Create variables for sums over all crops
-    rainfed_sum_var <- ncvar_def(
-      rainfed_output_sum_name,
-      units = fao_area_units,
+    rainfed_sum_var <- ncdf4::ncvar_def(
+      LandInG_setup$landuse$rainfed_output_sum_name,
+      units = LandInG_setup$landuse$fao_area_units,
       dim = list(lon_dim, lat_dim, time_dim),
       longname = "sum of rainfed harvested areas over all crops",
       missval = 1e30,
@@ -836,9 +1102,9 @@ for (fileindex in seq_along(ha_timeseries_filenames)) {
       prec = "double",
       compression = 5
     )
-    irrigated_sum_var <- ncvar_def(
-      irrigated_output_sum_name,
-      units = fao_area_units,
+    irrigated_sum_var <- ncdf4::ncvar_def(
+      LandInG_setup$landuse$irrigated_output_sum_name,
+      units = LandInG_setup$landuse$fao_area_units,
       dim = list(lon_dim, lat_dim, time_dim),
       longname = "sum of irrigated harvested areas over all crops",
       missval = 1e30,
@@ -846,9 +1112,9 @@ for (fileindex in seq_along(ha_timeseries_filenames)) {
       prec = "double",
       compression = 5
     )
-    total_sum_var <- ncvar_def(
-      total_output_sum_name,
-      units = fao_area_units,
+    total_sum_var <- ncdf4::ncvar_def(
+      LandInG_setup$landuse$total_output_sum_name,
+      units = LandInG_setup$landuse$fao_area_units,
       dim = list(lon_dim, lat_dim, time_dim),
       longname = c(
         "sum of total (rainfed + irrigated) harvested areas over all crops"
@@ -859,7 +1125,7 @@ for (fileindex in seq_along(ha_timeseries_filenames)) {
       compression = 5
     )
     # Status variable (this tracks which years have already been processed)
-    year_processed_var <- ncvar_def(
+    year_processed_var <- ncdf4::ncvar_def(
       "year_processed",
       units = "",
       dim = time_dim,
@@ -868,7 +1134,7 @@ for (fileindex in seq_along(ha_timeseries_filenames)) {
       missval = -9
     )
     # Create file
-    ha_timeseries_file <- nc_create(
+    ha_timeseries_file <- ncdf4::nc_create(
       ha_timeseries_filenames[fileindex],
       list(
         rainfed_area_var,
@@ -884,18 +1150,21 @@ for (fileindex in seq_along(ha_timeseries_filenames)) {
     # Set initial values
     # No years processed yet
     year_processed <- rep(0, time_dim$len)
-    ncvar_put(
+    ncdf4::ncvar_put(
       ha_timeseries_file,
       "year_processed",
       year_processed,
       count = length(year_processed)
     )
     # Crop names
-    ncvar_put(ha_timeseries_file, "crop", ts_crops)
+    ncdf4::ncvar_put(ha_timeseries_file, "crop", country_env$ts_crops)
     # Set values of latitude axis if flipped vertically compared to
     # harvested_fraction_file
-    ncvar_put(ha_timeseries_file, lat_dim$name, yFromRow(gadm_raster))
-    nc_close(ha_timeseries_file)
+    ncdf4::ncvar_put(
+      ha_timeseries_file,
+      lat_dim$name, terra::yFromRow(LandInG_setup$landuse$gadm_raster)
+    )
+    ncdf4::nc_close(ha_timeseries_file)
   } else {
     # If file exists already check if it is compatible or if relevant settings
     # have changed.
@@ -905,7 +1174,7 @@ for (fileindex in seq_along(ha_timeseries_filenames)) {
         "*** Trying to re-use previously created",
         sQuote(ha_timeseries_filenames[fileindex]), "***\n"
       )
-      ha_timeseries_file <- nc_open(ha_timeseries_filenames[fileindex])
+      ha_timeseries_file <- ncdf4::nc_open(ha_timeseries_filenames[fileindex])
       # Check if all required variables are in file
       if (any(!nc_vars %in% names(ha_timeseries_file$var))) {
         stop(
@@ -915,7 +1184,8 @@ for (fileindex in seq_along(ha_timeseries_filenames)) {
         )
       }
       # Check if dimension lengths match
-      if (lon_dim$len != ha_timeseries_file$dim$lon$len ||
+      if (
+        lon_dim$len != ha_timeseries_file$dim$lon$len ||
           lat_dim$len != ha_timeseries_file$dim$lat$len ||
           crop_dim$len != ha_timeseries_file$dim$crop$len
       ) {
@@ -925,14 +1195,17 @@ for (fileindex in seq_along(ha_timeseries_filenames)) {
         )
       }
       # Check if crops match
-      if (any(ncvar_get(ha_timeseries_file, "crop") != ts_crops)) {
+      if (
+        any(ncdf4::ncvar_get(ha_timeseries_file, "crop") != country_env$ts_crops)
+      ) {
         stop(
           "Crop names in ", sQuote(ha_timeseries_filenames[fileindex]),
           " do not match ts_crops"
         )
       }
       # Check that time axis matches (e.g. reference year has not changed)
-      if (ha_timeseries_file$dim$time$units != time_dim$units ||
+      if (
+        ha_timeseries_file$dim$time$units != time_dim$units ||
           any(ha_timeseries_file$dim$time$vals != time_dim$vals)
       ) {
         stop(
@@ -940,7 +1213,7 @@ for (fileindex in seq_along(ha_timeseries_filenames)) {
           " does not match script run"
         )
       }
-      nc_close(ha_timeseries_file)
+      ncdf4::nc_close(ha_timeseries_file)
     }
   }
 }
@@ -955,7 +1228,7 @@ redist_stats <- list()
 # Log files generated by this file in addition to NetCDF files
 # RData file containing information on spatial redistribution algorithm
 redist_stats_file <- file.path(
-  working_dir,
+  LandInG_setup$landuse$working_dir,
   paste0(
     "harvested_area_GADM_timeseries_",
     start_year, "-", end_year,
@@ -966,7 +1239,7 @@ redist_stats_file <- file.path(
 )
 # Log file for any gap filling that might be required
 gapfilling_log <- file.path(
-  working_dir,
+  LandInG_setup$landuse$working_dir,
   paste0(
     "harvested_area_GADM_timeseries_",
     start_year, "-", end_year,
@@ -1000,7 +1273,7 @@ if (file.exists(gapfilling_log)) {
 ## 8) mark year as processed in NetCDF file                                   ##
 cat(
   "Creating harvested area timeseries for",
-  length(ts_crops), "crops spanning the years",
+  length(country_env$ts_crops), "crops spanning the years",
   start_year, "to", end_year, "\n"
 )
 # Track run time
@@ -1011,17 +1284,19 @@ clist <- rbind(
   fao_landuse_country_def[, c("Country", "Start.Year", "End.Year")]
 )
 for (year in seq(start_year, end_year)) {
+  cyear <- as.character(year)
   # 1) Open NetCDF file for first year or whenever starting a new chunk, files
   # generated above.
   if (year %in% chunk_start || !exists("ha_timeseries_file")) {
     fileindex <- which(chunk_start <= year & chunk_end >= year)
-    ha_timeseries_file <- nc_open(
+    ha_timeseries_file <- ncdf4::nc_open(
       ha_timeseries_filenames[fileindex],
       write = TRUE
     )
     # Read which years have finished processing
-    year_processed <- ncvar_get(ha_timeseries_file, "year_processed")
-    min_fileyear <- min(output_period) + min(ha_timeseries_file$dim$time$vals)
+    year_processed <- ncdf4::ncvar_get(ha_timeseries_file, "year_processed")
+    min_fileyear <- min(LandInG_setup$landuse$output_period) +
+      min(ha_timeseries_file$dim$time$vals)
     cat("Output file:", ha_timeseries_file$filename, "\n")
   }
   # Check if year has finished processing already
@@ -1033,7 +1308,7 @@ for (year in seq(start_year, end_year)) {
     )
     # Close file if last year of chunk
     if (year %in% chunk_end) {
-      nc_close(ha_timeseries_file)
+      ncdf4::nc_close(ha_timeseries_file)
       rm(ha_timeseries_file)
     }
     # Skip to next year
@@ -1047,16 +1322,18 @@ for (year in seq(start_year, end_year)) {
       assign("ncfile", get(paste0(var, "_file")))
     } else {
       # Open NetCDF file and save in HYDE variable-specific variable
-      ncfile <- nc_open(get(paste0(var, "_filename")))
+      ncfile <- ncdf4::nc_open(LandInG_setup$landuse[[paste0(var, "_filename")]])
       assign(paste0(var, "_file"), ncfile)
     }
     # Check if HYDE data needs to be flipped vertically
     lats <- ncfile$dim$lat$vals
     lons <- ncfile$dim$lon$vals
-    hyde_flip <- (yFromRow(gadm_raster, 1) > yFromRow(gadm_raster, 2)) !=
-      (lats[1] > lats[2])
+    hyde_flip <- (
+      terra::yFromRow(LandInG_setup$landuse$gadm_raster, 1) >
+        terra::yFromRow(LandInG_setup$landuse$gadm_raster, 2)
+    ) != (lats[1] > lats[2])
     # Spatial extent of HYDE file
-    hyde_extent <- extent(
+    hyde_extent <- terra::ext(
       c(
         min(lons) - abs(lons[2] - lons[1]) / 2,
         max(lons) + abs(lons[2] - lons[1]) / 2,
@@ -1065,34 +1342,37 @@ for (year in seq(start_year, end_year)) {
       )
     )
     # Raster object corresponding to HYDE file
-    hyde_raster <- raster(
-      hyde_extent,
+    hyde_raster <- terra::rast(
+      extent = hyde_extent,
       resolution = c(abs(lons[1] - lons[2]), abs(lats[1] - lats[2]))
     )
     # Check that spatial extent matches to GADM data
     if (!matching_extent(
       hyde_extent,
-      extent(gadm_raster),
-      xres(gadm_raster),
-      yres(gadm_raster)
+      terra::ext(LandInG_setup$landuse$gadm_raster),
+      terra::xres(LandInG_setup$landuse$gadm_raster),
+      terra::yres(LandInG_setup$landuse$gadm_raster)
     )) {
       stop("Spatial extent of HYDE cropland does not match GADM extent")
     }
-    # Aggregation factor form HYDE resolution to output resolution
-    hyde2gadm <- round(res(hyde_raster) / res(gadm_raster), 4)
+    # Aggregation factor from HYDE resolution to output resolution
+    hyde2gadm <- round(
+      terra::res(LandInG_setup$landuse$gadm_raster) / terra::res(hyde_raster),
+      4
+    )
     if (max(hyde2gadm %% 1) != 0) {
       stop(
         "GADM resolution ",
-        toString(round(res(gadm_raster), 5)),
+        toString(round(terra::res(LandInG_setup$landuse$gadm_raster), 5)),
         " is not compatible with HYDE resolution ",
-        toString(round(res(hyde_raster), 5))
+        toString(round(terra::res(hyde_raster), 5))
       )
     }
     # Load HYDE data for this year
-    ncfiledata <- ncvar_get(
+    ncfiledata <- ncdf4::ncvar_get(
       ncfile,
-      get(paste0(var, "_varname")),
-      start = c(1, 1, year - min(hyde_period) + 1),
+      LandInG_setup$landuse[[paste0(var, "_varname")]],
+      start = c(1, 1, year - min(LandInG_setup$landuse$hyde_period) + 1),
       count = c(-1, -1, 1)
     )
     # Flip data vertically if necessary
@@ -1102,25 +1382,30 @@ for (year in seq(start_year, end_year)) {
     # Unit conversion to FAOSTAT area unit
     if (hyde_is_fraction) {
       if (matching_extent(
-        extent(hyde_area),
+        terra::ext(hyde_area),
         hyde_extent,
-        xres(hyde_area),
-        yres(hyde_area)
+        terra::xres(hyde_area),
+        terra::yres(hyde_area)
       )) {
         # Convert from fractional unit to absolute unit using hyde_area
         # hyde_area is in fao_area_units
-        ncfiledata <- ncfiledata * ud.convert(1, hyde_area_units, "1") *
-          values(hyde_area)
+        ncfiledata <- ncfiledata *
+          units::ud_convert(1, LandInG_setup$landuse$hyde_area_units, "1") *
+          terra::values(hyde_area, mat = FALSE)
       } else {
         stop(
-          "HYDE area from ", sQuote(hyde_area_file),
+          "HYDE area from ", sQuote(LandInG_setup$landuse$hyde_area_file),
           " and HYDE cropland from ", sQuote(ncfile$filename),
           "have different spatial extent."
         )
       }
     } else {
       # Convert from HYDE area unit to FAOSTAT area unit
-      ncfiledata <- ncfiledata * ud.convert(1, hyde_area_units, fao_area_units)
+      ncfiledata <- ncfiledata * units::ud_convert(
+        1,
+        LandInG_setup$landuse$hyde_area_units,
+        LandInG_setup$landuse$fao_area_units
+      )
     }
     if (max(hyde2gadm) > 1) {
       cat("Aggregating", sQuote(var), "to GADM resolution\n")
@@ -1145,7 +1430,7 @@ for (year in seq(start_year, end_year)) {
       "Expanding rainfed cropland in ",
       length(index),
       " cells because rainfed + irrigated cropland < total cropland in year ",
-       year
+      year
     )
     hyde_rainfed[index] <- hyde_cropland[index] - hyde_irrigated[index]
   }
@@ -1155,7 +1440,7 @@ for (year in seq(start_year, end_year)) {
     # Rainfed + irrigated too big
     mismatch_both <- which(
       hyde_cropland - hyde_rainfed < -1e-3 &
-      hyde_cropland - hyde_irrigated < -1e-3
+        hyde_cropland - hyde_irrigated < -1e-3
     )
     mismatch_rf <- which(hyde_cropland - hyde_rainfed < -1e-3)
     if (length(mismatch_both) > 0) {
@@ -1197,43 +1482,73 @@ for (year in seq(start_year, end_year)) {
   rm(index)
 
   # Check that year is present in country-scale harvested area timeseries
-  if (as.character(year) %in% dimnames(get(total_version_to_use))[[3]]) {
-    tot_ha_year <- get(total_version_to_use)[, , as.character(year)]
+  if (
+    cyear %in% dimnames(
+      country_env[[LandInG_setup$landuse$total_version_to_use]]
+    )[["time"]]
+  ) {
+    tot_ha_year <-
+      country_env[[LandInG_setup$landuse$total_version_to_use]][, , cyear]
   } else {
     warning(
-      year, " missing in ", total_version_to_use,
+      year, " missing in ", LandInG_setup$landuse$total_version_to_use,
       ". Processing by previous script should have ensured all years are",
       "present. Trying to extrapolate.",
       call. = FALSE,
       immediate. = TRUE
+    )
+    time_ind <- grep(
+      "time",
+      names(dim(country_env[[LandInG_setup$landuse$total_version_to_use]]))
     )
     tot_ha_year <- array(
       0,
-      dim = dim(get(total_version_to_use))[-3],
-      dimnames = dimnames(get(total_version_to_use))[-3]
+      dim = dim(
+        country_env[[LandInG_setup$landuse$total_version_to_use]]
+      )[-time_ind],
+      dimnames =
+        dimnames(
+          country_env[[LandInG_setup$landuse$total_version_to_use]]
+        )[-time_ind]
     )
   }
-  if (as.character(year) %in% dimnames(get(irrigated_version_to_use))[[3]]) {
-    ir_ha_year <- get(irrigated_version_to_use)[, , as.character(year)]
+  if (
+    cyear %in% dimnames(
+      country_env[[LandInG_setup$landuse$irrigated_version_to_use]]
+    )[["time"]]
+  ) {
+    ir_ha_year <-
+      country_env[[LandInG_setup$landuse$irrigated_version_to_use]][, , cyear]
   } else {
     warning(
-      year, " missing in ", irrigated_version_to_use,
+      year, " missing in ", LandInG_setup$landuse$irrigated_version_to_use,
       ". Processing by previous script should have ensured all years are",
       "present. Trying to extrapolate.",
       call. = FALSE,
       immediate. = TRUE
     )
+    time_ind <- grep(
+      "time",
+      names(dim(country_env[[LandInG_setup$landuse$irrigated_version_to_use]]))
+    )
     ir_ha_year <- array(
       0,
-      dim = dim(get(irrigated_version_to_use))[-3],
-      dimnames = dimnames(get(irrigated_version_to_use))[-3]
+      dim = dim(
+        country_env[[LandInG_setup$landuse$irrigated_version_to_use]]
+      )[-time_ind],
+      dimnames =
+        dimnames(
+          country_env[[LandInG_setup$landuse$irrigated_version_to_use]]
+        )[-time_ind]
     )
   }
 
   # 3) countries to process
   # Exclude country groups
   countries_year <- setdiff(
-    dimnames(get(total_version_to_use))[[1]],
+    dimnames(
+      country_env[[LandInG_setup$landuse$total_version_to_use]]
+    )[["country"]],
     names(fao_groups)
   )
   # Exclude countries that have ended or have not started to exist yet
@@ -1244,7 +1559,9 @@ for (year in seq(start_year, end_year)) {
   # Check for double entries (such as "China" for mainland China, Hongkong,
   # Taiwan)
   clist_dupl <- intersect(
-    names(which(sapply(fao_gadm_country_mapping, length) > 1)),
+    names(
+      which(sapply(LandInG_setup$landuse$fao_gadm_country_mapping, length) > 1)
+    ),
     countries_year
   )
   for (country in clist_dupl) {
@@ -1252,23 +1569,27 @@ for (year in seq(start_year, end_year)) {
     # itself
     cindex <- match(
       setdiff(countries_year, country),
-      names(fao_gadm_country_mapping)
+      names(LandInG_setup$landuse$fao_gadm_country_mapping)
     )
-    if (all(
-      fao_gadm_country_mapping[[country]] %in%
-      unlist(fao_gadm_country_mapping[cindex])
-    )) {
+    if (
+      all(
+        LandInG_setup$landuse$fao_gadm_country_mapping[[country]] %in%
+          unlist(LandInG_setup$landuse$fao_gadm_country_mapping[cindex])
+      )
+    ) {
       replacements <- names(
         which(
           sapply(
-            fao_gadm_country_mapping[cindex],
+            LandInG_setup$landuse$fao_gadm_country_mapping[cindex],
             function(haystack, needle) any(needle %in% haystack),
-            needle = fao_gadm_country_mapping[[country]]
+            needle = LandInG_setup$landuse$fao_gadm_country_mapping[[country]]
           )
         )
       )
       # Make sure replacements have data before replacing country.
-      if (any(tot_ha_year[replacements, ts_crops] >= 0, na.rm = TRUE)) {
+      if (
+        any(tot_ha_year[replacements, country_env$ts_crops] >= 0, na.rm = TRUE)
+      ) {
         message(
           "Removing ", sQuote(country),
           " from list of countries because it seems to be a group entry for ",
@@ -1285,23 +1606,28 @@ for (year in seq(start_year, end_year)) {
         countries_year <- setdiff(countries_year, replacements)
       }
       rm(replacements)
-    } else if (any(fao_gadm_country_mapping[[country]] %in%
-      unlist(fao_gadm_country_mapping[cindex])
-    )) {
+    } else if (
+      any(
+        LandInG_setup$landuse$fao_gadm_country_mapping[[country]] %in%
+          unlist(LandInG_setup$landuse$fao_gadm_country_mapping[cindex])
+      )
+    ) {
       replacements <- names(
         which(
           sapply(
-            fao_gadm_country_mapping[cindex],
+            LandInG_setup$landuse$fao_gadm_country_mapping[cindex],
             function(haystack, needle) any(needle %in% haystack),
-            needle = fao_gadm_country_mapping[[country]]
+            needle = LandInG_setup$landuse$fao_gadm_country_mapping[[country]]
           )
         )
       )
       mismatch <- setdiff(
-        fao_gadm_country_mapping[[country]],
-        unlist(fao_gadm_country_mapping[replacements])
+        LandInG_setup$landuse$fao_gadm_country_mapping[[country]],
+        unlist(LandInG_setup$landuse$fao_gadm_country_mapping[replacements])
       )
-      if (any(tot_ha_year[replacements, ts_crops] >= 0, na.rm = TRUE)) {
+      if (
+        any(tot_ha_year[replacements, country_env$ts_crops] >= 0, na.rm = TRUE)
+      ) {
         warning(
           "Cannot use data for ", toString(sQuote(replacements)),
           " because ",
@@ -1327,7 +1653,7 @@ for (year in seq(start_year, end_year)) {
         paste(
           c(country, replacements),
           sapply(
-            fao_gadm_country_mapping[c(country, replacements)],
+            LandInG_setup$landuse$fao_gadm_country_mapping[c(country, replacements)],
             function(x) toString(sQuote(x))
           ),
           sep = ": ",
@@ -1339,9 +1665,11 @@ for (year in seq(start_year, end_year)) {
     }
     rm(cindex)
   }
+
   # Check that there are no undetected duplicates left.
-  if (length(unlist(fao_gadm_country_cells[countries_year])) !=
-    length(unique(unlist(fao_gadm_country_cells[countries_year])))
+  if (
+    length(unlist(fao_gadm_country_cells[countries_year])) !=
+      length(unique(unlist(fao_gadm_country_cells[countries_year])))
   ) {
     cindex <- match(countries_year, names(fao_gadm_country_cells))
     freq_table <- as.data.frame(
@@ -1363,7 +1691,7 @@ for (year in seq(start_year, end_year)) {
       paste(
         c(clist_dupl),
         sapply(
-          fao_gadm_country_mapping[clist_dupl],
+          LandInG_setup$landuse$fao_gadm_country_mapping[clist_dupl],
           function(x) toString(sQuote(x))
         ),
         sep = ": ",
@@ -1428,7 +1756,7 @@ for (year in seq(start_year, end_year)) {
       if (all(is.na(hyde_cropland[ccells]))) {
         # All cells for this country are NA in HYDE cropland
         if (any(
-          landuse_array_expanded[country, "Cropland", "Area", ] > 0,
+          country_env$landuse_array_expanded[country, "Cropland", "Area", ] > 0,
           na.rm = TRUE
         )) {
           # FAOSTAT has cropland at some point in time for this country
@@ -1459,70 +1787,49 @@ for (year in seq(start_year, end_year)) {
   }
   # Check consistency with data used in
   # split_global_harvested_areas_into_rainfed_irrigated.R
-  if (exists("hyde_cropland_country_timeseries")) {
-    clist2 <- intersect(
-      dimnames(hyde_cropland_country_timeseries)[[1]],
-      countries_year
+  clist2 <- intersect(
+    dimnames(country_env$hyde_cropland_country_timeseries)[["country"]],
+    countries_year
+  )
+  mismatch <- abs(
+    country_env$hyde_cropland_country_timeseries[clist2, cyear] -
+      cropland_year_country[clist2]
+  )
+  if (any(mismatch > 1e-3)) {
+    warning(
+      "Inconsistencies between HYDE cropland used here and ",
+      "HYDE cropland used in previous script",
+      call. = FALSE,
+      immediate. = TRUE
     )
-    mismatch <- abs(
-      hyde_cropland_country_timeseries[clist2, as.character(year)] -
-        cropland_year_country[clist2]
-    )
-    if (any(mismatch > 1e-3)) {
-      warning(
-        "Inconsistencies between HYDE cropland used here and ",
-        "HYDE cropland used in previous script",
-        call. = FALSE,
-        immediate. = TRUE
-      )
-    }
-    rm(clist2, mismatch)
   }
-  if (exists("hyde_irrigated_country_timeseries")) {
-    clist2 <- intersect(
-      dimnames(hyde_irrigated_country_timeseries)[[1]],
-      countries_year
+  rm(clist2, mismatch)
+
+  clist2 <- intersect(
+    dimnames(country_env$hyde_irrigated_country_timeseries)[["country"]],
+    countries_year
+  )
+  mismatch <- abs(
+    country_env$hyde_irrigated_country_timeseries[clist2, cyear] -
+      irrigated_year_country[clist2]
+  )
+  if (any(mismatch > 1e-3)) {
+    warning(
+      "Inconsistencies between HYDE irrigated cropland used here ",
+      "and HYDE irrigated cropland used in previous script",
+      call. = FALSE,
+      immediate. = TRUE
     )
-    mismatch <- abs(
-      hyde_irrigated_country_timeseries[clist2, as.character(year)] -
-        irrigated_year_country[clist2]
-    )
-    if (any(mismatch > 1e-3)) {
-      warning(
-        "Inconsistencies between HYDE irrigated cropland used here ",
-        "and HYDE irrigated cropland used in previous script",
-        call. = FALSE,
-        immediate. = TRUE
-      )
-    }
-    rm(clist2, mismatch)
   }
-  if (exists("hyde_rainfed_country_timeseries")) {
+  rm(clist2, mismatch)
+
+  if (!is.null(country_env[["hyde_gaez_max_ha_country_timeseries"]])) {
     clist2 <- intersect(
-      dimnames(hyde_rainfed_country_timeseries)[[1]],
+      dimnames(country_env$hyde_gaez_max_ha_country_timeseries)[["country"]],
       countries_year
     )
     mismatch <- abs(
-      hyde_rainfed_country_timeseries[clist2, as.character(year)] -
-        rainfed_year_country[clist2]
-    )
-    if (any(mismatch > 1e-3)) {
-      warning(
-        "Inconsistencies between HYDE rainfed cropland used here ",
-        "and HYDE rainfed cropland used in previous script",
-        call. = FALSE,
-        immediate. = TRUE
-      )
-    }
-    rm(clist2, mismatch)
-  }
-  if (exists("hyde_gaez_max_ha_country_timeseries")) {
-    clist2 <- intersect(
-      dimnames(hyde_gaez_max_ha_country_timeseries)[[1]],
-      countries_year
-    )
-    mismatch <- abs(
-      hyde_gaez_max_ha_country_timeseries[clist2, as.character(year)] -
+      country_env$hyde_gaez_max_ha_country_timeseries[clist2, cyear] -
         total_suit_year_country[clist2]
     )
     if (any(mismatch > 1e-3)) {
@@ -1535,13 +1842,13 @@ for (year in seq(start_year, end_year)) {
     }
     rm(clist2, mismatch)
   }
-  if (exists("hyde_gaez_max_ir_ha_country_timeseries")) {
+  if (!is.null(country_env[["hyde_gaez_max_ir_ha_country_timeseries"]])) {
     clist2 <- intersect(
-      dimnames(hyde_gaez_max_ir_ha_country_timeseries)[[1]],
+      dimnames(country_env$hyde_gaez_max_ir_ha_country_timeseries)[["country"]],
       countries_year
     )
     mismatch <- abs(
-      hyde_gaez_max_ir_ha_country_timeseries[clist2, as.character(year)] -
+      country_env$hyde_gaez_max_ir_ha_country_timeseries[clist2, cyear] -
         ir_suit_year_country[clist2]
     )
     if (any(mismatch > 1e-3)) {
@@ -1554,13 +1861,15 @@ for (year in seq(start_year, end_year)) {
     }
     rm(clist2, mismatch)
   }
-  if (exists("hyde_gaez_max_rf_ha_on_rf_country_timeseries")) {
+  if (!is.null(country_env[["hyde_gaez_max_rf_ha_on_rf_country_timeseries"]])) {
     clist2 <- intersect(
-      dimnames(hyde_gaez_max_rf_ha_on_rf_country_timeseries)[[1]],
+      dimnames(
+        country_env$hyde_gaez_max_rf_ha_on_rf_country_timeseries
+      )[["country"]],
       countries_year
     )
     mismatch <- abs(
-      hyde_gaez_max_rf_ha_on_rf_country_timeseries[clist2, as.character(year)] -
+      country_env$hyde_gaez_max_rf_ha_on_rf_country_timeseries[clist2, cyear] -
         rf_suit_rf_year_country[clist2]
     )
     if (any(mismatch > 1e-3)) {
@@ -1573,13 +1882,15 @@ for (year in seq(start_year, end_year)) {
     }
     rm(clist2, mismatch)
   }
-  if (exists("hyde_gaez_max_rf_ha_on_ir_country_timeseries")) {
+  if (!is.null(country_env[["hyde_gaez_max_rf_ha_on_ir_country_timeseries"]])) {
     clist2 <- intersect(
-      dimnames(hyde_gaez_max_rf_ha_on_ir_country_timeseries)[[1]],
+      dimnames(
+        country_env$hyde_gaez_max_rf_ha_on_ir_country_timeseries
+      )[["country"]],
       countries_year
     )
     mismatch <- abs(
-      hyde_gaez_max_rf_ha_on_ir_country_timeseries[clist2, as.character(year)] -
+      country_env$hyde_gaez_max_rf_ha_on_ir_country_timeseries[clist2, cyear] -
         rf_suit_ir_year_country[clist2]
     )
     if (any(mismatch > 1e-3)) {
@@ -1620,13 +1931,14 @@ for (year in seq(start_year, end_year)) {
   for (var in c("irrigated_area_sum", "rainfed_area_sum", "total_area_sum")) {
     vals <- double(length(hyde_cropland))
     # Set cells outside of GADM countries to NA
-    vals[which(is.na(gadm_raster[]))] <- NA
+    vals[which(is.na(LandInG_setup$landuse$gadm_raster[]))] <- NA
     assign(var, vals)
   }
 
   # Check for missing data in total harvested areas
-  if (!any(tot_ha_year[countries_year, ] > 0, na.rm = TRUE) &&
-    any(cropland_year_country[countries_year] > 0, na.rm = TRUE)
+  if (
+    !any(tot_ha_year[countries_year, ] > 0, na.rm = TRUE) &&
+      any(cropland_year_country[countries_year] > 0, na.rm = TRUE)
   ) {
     # Need to fill tot_ha_year
     warning(
@@ -1645,35 +1957,50 @@ for (year in seq(start_year, end_year)) {
         next
       }
       # Cropland time series
-      years <- as.integer(dimnames(get(total_version_to_use))[[3]])
+      years <- as.integer(
+        dimnames(
+          country_env[[LandInG_setup$landuse$total_version_to_use]]
+        )[["time"]]
+      )
       if (year < min(years)) {
         # Append year to beginning of time series
         tmp_cropseq <- c(
           cropland_year_country[country],
-          hyde_cropland_country_timeseries[country, ]
+          country_env$hyde_cropland_country_timeseries[country, ]
         )
-        names(tmp_cropseq)[1] <- as.character(year)
+        names(tmp_cropseq)[1] <- cyear
       } else if (year > max(years)) {
         # Append year to end of time series
         tmp_cropseq <- c(
-          hyde_cropland_country_timeseries[country, ],
+          country_env$hyde_cropland_country_timeseries[country, ],
           cropland_year_country[country]
         )
-        names(tmp_cropseq)[length(tmp_cropseq)] <- as.character(year)
+        names(tmp_cropseq)[length(tmp_cropseq)] <- cyear
       } else {
-        tmp_cropseq <- hyde_cropland_country_timeseries[country, ]
+        tmp_cropseq <- country_env$hyde_cropland_country_timeseries[country, ]
       }
-      for (crop in ts_crops) {
-        if (any(get(total_version_to_use)[country, crop, ] > 0, na.rm = TRUE)) {
+      for (crop in country_env$ts_crops) {
+        if (
+          any(
+            get(
+              LandInG_setup$landuse$total_version_to_use,
+              envir = country_env
+            )[country, crop, ] > 0,
+            na.rm = TRUE
+          )
+        ) {
           sink(file = gapfilling_log, append = TRUE, split = FALSE)
           country_ha <- fill_timeseries(
-            get(total_version_to_use)[country, crop, ],
+            get(
+              LandInG_setup$landuse$total_version_to_use,
+              envir = country_env
+            )[country, crop, ],
             tmp_cropseq,
             paste(crop, "in", country),
             quiet = TRUE
           )
           sink()
-          tot_ha_year[country, crop] <- country_ha[as.character(year)]
+          tot_ha_year[country, crop] <- country_ha[cyear]
         } else {
           tot_ha_year[country, crop] <- NA
         }
@@ -1682,34 +2009,36 @@ for (year in seq(start_year, end_year)) {
   }
   # Check that maximum possible harvested area is not exceeded
   tot_ha_sum_year <- rowSums(
-    tot_ha_year[countries_year, ts_crops],
+    tot_ha_year[countries_year, country_env$ts_crops],
     na.rm = TRUE
   )
   if (any(tot_ha_sum_year - total_suit_year_country[countries_year] > 1e-4)) {
     scalar <- tot_ha_sum_year / total_suit_year_country[countries_year]
     scalar <- pmax(scalar, 1)
-    tmpdata <- tot_ha_year[countries_year, ts_crops] / scalar
+    tmpdata <- tot_ha_year[countries_year, country_env$ts_crops] / scalar
     cat(
       round(
-        100 - sum(tmpdata[countries_year, ts_crops], na.rm = TRUE) /
-          sum(tot_ha_year[countries_year, ts_crops], na.rm = TRUE) * 100,
+        100 - sum(tmpdata[countries_year, country_env$ts_crops], na.rm = TRUE) /
+          sum(tot_ha_year[countries_year, country_env$ts_crops], na.rm = TRUE) *
+          100,
         2
       ),
       "% of global harvested areas have been removed this year because they",
       "exceeded maximum possible harvested areas\n"
     )
-    tot_ha_year[countries_year, ts_crops] <- tmpdata
+    tot_ha_year[countries_year, country_env$ts_crops] <- tmpdata
     rm(tmpdata)
   }
   # Update sum
   tot_ha_sum_year <- rowSums(
-    tot_ha_year[countries_year, ts_crops],
+    tot_ha_year[countries_year, country_env$ts_crops],
     na.rm = TRUE
   )
 
   # Check for missing data in irrigated harvested areas
-  if (!any(ir_ha_year[countries_year, ] > 0, na.rm = TRUE) &&
-    any(irrigated_year_country[countries_year] > 0, na.rm = TRUE)
+  if (
+    !any(ir_ha_year[countries_year, ] > 0, na.rm = TRUE) &&
+      any(irrigated_year_country[countries_year] > 0, na.rm = TRUE)
   ) {
     # Need to fill ir_ha_year
     warning(
@@ -1726,38 +2055,48 @@ for (year in seq(start_year, end_year)) {
       if (irrigated_year_country[country] == 0) {
         next
       }
-      years <- as.integer(dimnames(get(irrigated_version_to_use))[[3]])
+      years <- as.integer(
+        dimnames(
+          country_env[[LandInG_setup$landuse$irrigated_version_to_use]]
+        )[["time"]]
+      )
       if (year < min(years)) {
         # Append year to beginning of time series
         tmp_cropseq <- c(
           irrigated_year_country[country],
-          hyde_irrigated_country_timeseries[country, ]
+          country_env$hyde_irrigated_country_timeseries[country, ]
         )
-        names(tmp_cropseq)[1] <- as.character(year)
+        names(tmp_cropseq)[1] <- cyear
       } else if (year > max(years)) {
         # Append year to end of time series
         tmp_cropseq <- c(
-          hyde_irrigated_country_timeseries[country, ],
+          country_env$hyde_irrigated_country_timeseries[country, ],
           irrigated_year_country[country]
         )
-        names(tmp_cropseq)[length(tmp_cropseq)] <- as.character(year)
+        names(tmp_cropseq)[length(tmp_cropseq)] <- cyear
       } else {
-        tmp_cropseq <- hyde_irrigated_country_timeseries[country, ]
+        tmp_cropseq <- country_env$hyde_irrigated_country_timeseries[country, ]
       }
-      for (crop in ts_crops) {
+      for (crop in country_env$ts_crops) {
         if (any(
-          get(irrigated_version_to_use)[country, crop, ] > 0,
+          get(
+            LandInG_setup$landuse$irrigated_version_to_use,
+            envir = country_env
+          )[country, crop, ] > 0,
           na.rm = TRUE
         )) {
           sink(file = gapfilling_log, append = TRUE, split = FALSE)
           country_ha <- fill_timeseries(
-            get(irrigated_version_to_use)[country, crop, ],
+            get(
+              LandInG_setup$landuse$irrigated_version_to_use,
+              envir = country_env
+            )[country, crop, ],
             tmp_cropseq,
             paste(crop, "in", country),
             quiet = TRUE
           )
           sink()
-          ir_ha_year[country, crop] <- country_ha[as.character(year)]
+          ir_ha_year[country, crop] <- country_ha[cyear]
         } else {
           ir_ha_year[country, crop] <- NA
         }
@@ -1769,31 +2108,41 @@ for (year in seq(start_year, end_year)) {
   # areas
   ir_ha_year <- pmin(tot_ha_year, ir_ha_year)
   # Check that maximum possible harvested area is not exceeded
-  ir_ha_sum_year <- rowSums(ir_ha_year[countries_year, ts_crops], na.rm = TRUE)
+  ir_ha_sum_year <- rowSums(
+    ir_ha_year[countries_year, country_env$ts_crops],
+    na.rm = TRUE
+  )
   if (any(ir_ha_sum_year - ir_suit_year_country[countries_year] > 1e-4)) {
     scalar <- ir_ha_sum_year / ir_suit_year_country[countries_year]
     scalar <- pmax(scalar, 1)
-    tmpdata <- ir_ha_year[countries_year, ts_crops] / scalar
+    tmpdata <- ir_ha_year[countries_year, country_env$ts_crops] / scalar
     cat(
       round(
-        100 - sum(tmpdata[countries_year, ts_crops], na.rm = TRUE) /
-          sum(ir_ha_year[countries_year, ts_crops], na.rm = TRUE) * 100,
+        100 - sum(tmpdata[countries_year, country_env$ts_crops], na.rm = TRUE) /
+          sum(ir_ha_year[countries_year, country_env$ts_crops], na.rm = TRUE) *
+          100,
         2
       ),
       "% of global irrigated harvested areas have been removed this year",
       "because they exceeded maximum possible irrigated harvested areas\n"
     )
-    ir_ha_year[countries_year, ts_crops] <- tmpdata
+    ir_ha_year[countries_year, country_env$ts_crops] <- tmpdata
     rm(tmpdata, scalar)
   }
   # Update sum
-  ir_ha_sum_year <- rowSums(ir_ha_year[countries_year, ts_crops], na.rm = TRUE)
+  ir_ha_sum_year <- rowSums(
+    ir_ha_year[countries_year, country_env$ts_crops],
+    na.rm = TRUE
+  )
 
   # Now derive rainfed harvested areas from total - irrigated
   rf_ha_year <- tot_ha_year - pmax(ir_ha_year, 0, na.rm = TRUE)
   rf_ha_year <- pmax(rf_ha_year, 0)
   # Sum over all crops
-  rf_ha_sum_year <- rowSums(rf_ha_year[countries_year, ts_crops], na.rm = TRUE)
+  rf_ha_sum_year <- rowSums(
+    rf_ha_year[countries_year, country_env$ts_crops],
+    na.rm = TRUE
+  )
 
   # Check that rainfed areas are not too big for rainfed cropland and remaining
   # irrigated cropland
@@ -1806,8 +2155,10 @@ for (year in seq(start_year, end_year)) {
     rf_suit_ir_year_country[countries_year],
     na.rm = TRUE
   )
-  mismatch <- which(rf_ha_sum_year - rf_suit_rf_year_country[countries_year] -
-    rainfed_on_irrig_ha_max > 1e-4)
+  mismatch <- which(
+    rf_ha_sum_year - rf_suit_rf_year_country[countries_year] -
+      rainfed_on_irrig_ha_max > 1e-4
+  )
   if (length(mismatch) > 0) {
     for (country in names(mismatch)) {
       total_ha_on_irrig <- tot_ha_sum_year[country] -
@@ -1829,9 +2180,9 @@ for (year in seq(start_year, end_year)) {
       # Rainfed harvested areas of those crops that also have irrigated
       # harvested areas (excludes purely rainfed crops)
       irrig_exp_pot <- sum(
-        tot_ha_year[country, ts_crops] - ifelse(
-          ir_ha_year[country, ts_crops] > 0,
-          ir_ha_year[country, ts_crops],
+        tot_ha_year[country, country_env$ts_crops] - ifelse(
+          ir_ha_year[country, country_env$ts_crops] > 0,
+          ir_ha_year[country, country_env$ts_crops],
           NA
         ), na.rm = TRUE
       )
@@ -1840,15 +2191,21 @@ for (year in seq(start_year, end_year)) {
       if (irrig_exp_pot > 0) {
         # Expand existing irrigated crops
         croplist <- names(
-          which(rf_ha_year[country, ts_crops] < tot_ha_year[country, ts_crops])
+          which(
+            rf_ha_year[country, country_env$ts_crops] <
+              tot_ha_year[country, country_env$ts_crops]
+          )
         )
         ir_ha_year[country, croplist] <- ir_ha_year[country, croplist] +
-        min(shift_ha / irrig_exp_pot, 1) * rf_ha_year[country, croplist]
+          min(shift_ha / irrig_exp_pot, 1) * rf_ha_year[country, croplist]
       }
       rm(irrig_exp_pot)
       # Take some purely rainfed crop areas
       croplist <- names(
-        which(rf_ha_year[country, ts_crops] == tot_ha_year[country, ts_crops])
+        which(
+          rf_ha_year[country, country_env$ts_crops] ==
+            tot_ha_year[country, country_env$ts_crops]
+        )
       )
       ir_ha_year[country, croplist] <- rf_ha_year[country, croplist] *
         missing_exp_pot / sum(rf_ha_year[country, croplist], na.rm = TRUE)
@@ -1856,7 +2213,7 @@ for (year in seq(start_year, end_year)) {
       rf_ha_year <- tot_ha_year - pmax(ir_ha_year, 0, na.rm = TRUE)
       rf_ha_year <- pmax(rf_ha_year, 0)
       # Update amount of ha to shift from rainfed to irrigated
-      shift_ha <- sum(rf_ha_year[country, ts_crops], na.rm = TRUE) -
+      shift_ha <- sum(rf_ha_year[country, country_env$ts_crops], na.rm = TRUE) -
         rf_suit_rf_year_country[country] - rainfed_ha_irrig
       if (shift_ha > 1e-8) {
         stop("Redistribution error in ", sQuote(country), " in ", year)
@@ -1867,22 +2224,23 @@ for (year in seq(start_year, end_year)) {
 
   # 4) first pass of spatial disaggregation
   # Process each crop individually
-  for (crop in ts_crops) {
+  for (crop in country_env$ts_crops) {
     # Variables for gridded crop-specific rainfed and irrigated harvested area
     # this year
     rf_ha_crop_year <- ir_ha_crop_year <- array(NA, dim = length(hyde_cropland))
     # Load Monfreda-based pattern
-    harvested_fraction <- c(
-      ncvar_get(
-        harvested_fraction_file,
-        "harvested_fraction",
-        start = c(1, 1, which(harvested_fraction_crops == crop)),
-        count = c(-1, -1, 1)
-      )
+    harvested_fraction <- load_ha_fraction(
+      nc = harvested_fraction_file,
+      crop_index = which(harvested_fraction_crops == crop),
+      year,
+      harvested_fraction_hastime,
+      harvested_fraction_flip,
+      LandInG_setup
     )
     # Check if pattern has values
-    if (all(is.na(harvested_fraction)) &&
-      !crop %in% empty_pattern_msg[["all"]]
+    if (
+      all(is.na(harvested_fraction)) &&
+        !crop %in% empty_pattern_msg[["all"]]
     ) {
       # FAO crop with no Monfreda pattern
       message(
@@ -1906,9 +2264,7 @@ for (year in seq(start_year, end_year)) {
         # Skip to next country
         next
       }
-      if (is.na(tot_ha_year[country, crop]) ||
-        tot_ha_year[country, crop] == 0
-      ) {
+      if (is.na(tot_ha_year[country, crop]) || tot_ha_year[country, crop] == 0) {
         # No harvested area data, no need to process
         # Set grid cells to zero.
         rf_ha_crop_year[ccells] <- 0
@@ -1931,8 +2287,9 @@ for (year in seq(start_year, end_year)) {
       }
       if (all(is.na(harvested_fraction[ccells]))) {
         # No pattern for crop in this country, need to create one.
-        if (!crop %in% empty_pattern_msg[[country]] &&
-          !crop %in% empty_pattern_msg[["all"]]
+        if (
+          !crop %in% empty_pattern_msg[[country]] &&
+            !crop %in% empty_pattern_msg[["all"]]
         ) {
           message(
             "There is no harvested area pattern for ", sQuote(crop),
@@ -2054,24 +2411,32 @@ for (year in seq(start_year, end_year)) {
       pmax(ir_ha_crop_year, 0, na.rm = TRUE)
 
     # 5) Save preliminary pattern of this crop and this year to NetCDF
-    ncvar_put(
+    ncdf4::ncvar_put(
       ha_timeseries_file,
-      rainfed_output_name,
+      LandInG_setup$landuse$rainfed_output_name,
       rf_ha_crop_year,
-      start = c(1, 1, which(ts_crops == crop), year - min_fileyear + 1),
+      start = c(
+        1, 1,
+        which(country_env$ts_crops == crop),
+        year - min_fileyear + 1
+      ),
       count = c(-1, -1, 1, 1)
     )
-    ncvar_put(
+    ncdf4::ncvar_put(
       ha_timeseries_file,
-      irrigated_output_name,
+      LandInG_setup$landuse$irrigated_output_name,
       ir_ha_crop_year,
-      start = c(1, 1, which(ts_crops == crop), year - min_fileyear + 1),
+      start = c(
+        1, 1,
+        which(country_env$ts_crops == crop),
+        year - min_fileyear + 1
+      ),
       count = c(-1, -1, 1, 1)
     )
     rm(ir_ha_crop_year, rf_ha_crop_year)
   } # End crop loop for first disaggregation pass
 
-  nc_sync(ha_timeseries_file)
+  ncdf4::nc_sync(ha_timeseries_file)
   total_area_sum <- rainfed_area_sum + irrigated_area_sum
 
   # 6) Check if spatial redistribution is necessary because sums over all crops
@@ -2081,11 +2446,17 @@ for (year in seq(start_year, end_year)) {
     "Range of cropping factor this year:",
     paste(round(range(cf, na.rm = TRUE), 2), collapse = " - "), "\n"
   )
+  exceeded <- any(
+    # Check cropping factor and absolute difference
+    cf > (3 + 1e-4) & (total_area_sum - hyde_cropland * 3 > 1e-4),
+    na.rm = TRUE
+  )
   rm(cf)
 
   # Maximum possible irrigated harvested areas based on GAEZ multicropping
   # suitability
-  irrigated_suit <- hyde_irrigated * values(gaez_multicropping_suit_ir)
+  irrigated_suit <- hyde_irrigated *
+    terra::values(gaez_multicropping_suit_ir, mat = FALSE)
   # There are some small inconsistencies between HYDE total cropland, HYDE
   # irrigated cropland and HYDE rainfed cropland. Total harvested areas at
   # country scale were derived using HYDE total cropland, irrigated harvested
@@ -2093,7 +2464,7 @@ for (year in seq(start_year, end_year)) {
   # defined as the rest, that's why use hyde_cropland - hyde_irrigated here
   # instead of hyde_rainfed
   rainfed_suit_rainfed <- (hyde_cropland - hyde_irrigated) *
-    values(gaez_multicropping_suit_rf)
+    terra::values(gaez_multicropping_suit_rf, mat = FALSE)
 
   # Determine countries that need redistribution
   redist_units <- character(0)
@@ -2101,7 +2472,10 @@ for (year in seq(start_year, end_year)) {
   if (length(mismatch_ir) > 0) {
     # Irrigated multicropping suitability exceeded in some cells, identify
     # unique countries
-    index <- match(gadm_raster[mismatch_ir], gadm_country_names$level0_ID)
+    index <- match(
+      ul(LandInG_setup$landuse$gadm_raster[mismatch_ir]),
+      gadm_country_names$level0_ID
+    )
     redist_units <- union(redist_units, gadm_country_names$level0_code[index])
   }
   mismatch_rf <- which(rainfed_area_sum - rainfed_suit_rainfed > 1e-4)
@@ -2109,20 +2483,23 @@ for (year in seq(start_year, end_year)) {
     # Rainfed harvested areas exceed rainfed multicropping suitability on
     # rainfed cropland; they may still fit using free irrigated cropland, but
     # need to check. Identify unique countries
-    index <- match(gadm_raster[mismatch_rf], gadm_country_names$level0_ID)
+    index <- match(
+      ul(LandInG_setup$landuse$gadm_raster[mismatch_rf]),
+      gadm_country_names$level0_ID
+    )
     redist_units <- union(redist_units, gadm_country_names$level0_code[index])
   }
   rm(mismatch_ir, mismatch_rf, irrigated_suit, rainfed_suit_rainfed)
 
   if (length(redist_units) > 0) {
     # Some countries need redistribution
-    redist_stats[[as.character(year)]] <- list()
+    redist_stats[[cyear]] <- list()
     # Detected GADM codes may be for smaller successor countries, identify
     # matching countries existing this year
     redist_countries <- names(
       which(
         sapply(
-          fao_gadm_country_mapping,
+          LandInG_setup$landuse$fao_gadm_country_mapping,
           function(indata) any(redist_units %in% indata)
         )
       )
@@ -2130,7 +2507,9 @@ for (year in seq(start_year, end_year)) {
     redist_countries <- intersect(countries_year, redist_countries)
 
     if (length(redist_countries) == 1) {
-      croplist <- names(which(tot_ha_year[redist_countries, ts_crops] > 0))
+      croplist <- names(
+        which(tot_ha_year[redist_countries, country_env$ts_crops] > 0)
+      )
       cat(
         "Need to redistribute harvested areas in 1 country.",
         "Reloading spatial patterns for",
@@ -2139,7 +2518,9 @@ for (year in seq(start_year, end_year)) {
     } else {
       croplist <- names(
         which(
-          colSums(tot_ha_year[redist_countries, ts_crops], na.rm = TRUE) > 0
+          colSums(
+            tot_ha_year[redist_countries, country_env$ts_crops], na.rm = TRUE
+          ) > 0
         )
       )
       cat(
@@ -2164,29 +2545,39 @@ for (year in seq(start_year, end_year)) {
     # - redist_country_rf_ha
     for (crop in croplist) {
       # Reload harvested area patterns generated in first disaggregation
-      tmp_rf_ha <- ncvar_get(
+      tmp_rf_ha <- ncdf4::ncvar_get(
         ha_timeseries_file,
-        rainfed_output_name,
-        start = c(1, 1, which(ts_crops == crop), year - min_fileyear + 1),
+        LandInG_setup$landuse$rainfed_output_name,
+        start = c(
+          1, 1,
+          which(country_env$ts_crops == crop),
+          year - min_fileyear + 1
+        ),
         count = c(-1, -1, 1, 1)
       )
-      tmp_ir_ha <- ncvar_get(
+      tmp_ir_ha <- ncdf4::ncvar_get(
         ha_timeseries_file,
-        irrigated_output_name,
-        start = c(1, 1, which(ts_crops == crop), year - min_fileyear + 1),
+        LandInG_setup$landuse$irrigated_output_name,
+        start = c(
+          1, 1,
+          which(country_env$ts_crops == crop),
+          year - min_fileyear + 1
+        ),
         count = c(-1, -1, 1, 1)
       )
       # Reload harvested_fraction for crop
-      tmppattern <- c(
-        ncvar_get(
-          harvested_fraction_file,
-          "harvested_fraction",
-          start = c(1, 1, which(harvested_fraction_crops == crop)),
-          count = c(-1, -1, 1)
-        )
+      tmppattern <- load_ha_fraction(
+        nc = harvested_fraction_file,
+        crop_index = which(harvested_fraction_crops == crop),
+        year,
+        harvested_fraction_hastime,
+        harvested_fraction_flip,
+        LandInG_setup
       )
-      if (any(tmp_rf_ha[-crop_cells] > 0, na.rm = TRUE) ||
-        any(tmp_ir_ha[-crop_cells] > 0, na.rm = TRUE)) {
+      if (
+        any(tmp_rf_ha[-crop_cells] > 0, na.rm = TRUE) ||
+          any(tmp_ir_ha[-crop_cells] > 0, na.rm = TRUE)
+      ) {
         stop("Harvested areas outside cropland for crop ", sQuote(crop))
       }
       for (country in redist_countries) {
@@ -2203,19 +2594,19 @@ for (year in seq(start_year, end_year)) {
           # for consecutive crops.
           country_rf_ha <- array(
             dim = c(
-              length(ccells_crop),
-              length(which(rf_ha_year[country, ts_crops] > 0))
+              cell = length(ccells_crop),
+              item = length(which(rf_ha_year[country, country_env$ts_crops] > 0))
             ),
             dimnames = list(
-              NULL,
-              names(which(rf_ha_year[country, ts_crops] > 0))
+              cell = NULL,
+              item = names(which(rf_ha_year[country, country_env$ts_crops] > 0))
             )
           )
           assign(array_name, country_rf_ha)
         } else {
           country_rf_ha <- get(array_name)
         }
-        if (crop %in% dimnames(country_rf_ha)[[2]]) {
+        if (crop %in% dimnames(country_rf_ha)[["item"]]) {
           country_rf_ha[, crop] <- tmp_rf_ha[ccells_crop]
           assign(array_name, country_rf_ha)
         }
@@ -2229,19 +2620,19 @@ for (year in seq(start_year, end_year)) {
           # for consecutive crops.
           country_ir_ha <- array(
             dim = c(
-              length(ccells_crop),
-              length(which(ir_ha_year[country, ts_crops] > 0))
+              cell = length(ccells_crop),
+              item = length(which(ir_ha_year[country, country_env$ts_crops] > 0))
             ),
             dimnames = list(
-              NULL,
-              names(which(ir_ha_year[country, ts_crops] > 0))
+              cell = NULL,
+              item = names(which(ir_ha_year[country, country_env$ts_crops] > 0))
             )
           )
           assign(array_name, country_ir_ha)
         } else {
           country_ir_ha <- get(array_name)
         }
-        if (crop %in% dimnames(country_ir_ha)[[2]]) {
+        if (crop %in% dimnames(country_ir_ha)[["item"]]) {
           country_ir_ha[, crop] <- tmp_ir_ha[ccells_crop]
           assign(array_name, country_ir_ha)
         }
@@ -2255,19 +2646,19 @@ for (year in seq(start_year, end_year)) {
           # for consecutive crops.
           country_pattern <- array(
             dim = c(
-              length(ccells_crop),
-              length(which(tot_ha_year[country, ts_crops] > 0))
+              cell = length(ccells_crop),
+              item = length(which(tot_ha_year[country, country_env$ts_crops] > 0))
             ),
             dimnames = list(
-              NULL,
-              names(which(tot_ha_year[country, ts_crops] > 0))
+              cell = NULL,
+              item = names(which(tot_ha_year[country, country_env$ts_crops] > 0))
             )
           )
           assign(array_name, country_pattern)
         } else {
           country_pattern <- get(array_name)
         }
-        if (crop %in% dimnames(country_pattern)[[2]]) {
+        if (crop %in% dimnames(country_pattern)[["item"]]) {
           country_pattern[, crop] <- tmppattern[ccells_crop]
           assign(array_name, country_pattern)
         }
@@ -2302,42 +2693,46 @@ for (year in seq(start_year, end_year)) {
       country_ir_ha <- pmax(country_ir_ha, 0, na.rm = TRUE)
       # Irrigated suitability
       country_ir_suit <- hyde_irrigated[ccells_crop] *
-        gaez_multicropping_suit_ir[ccells_crop]
+        ul(gaez_multicropping_suit_ir[ccells_crop])
       # Set all NAs to zero
       country_ir_suit <- pmax(country_ir_suit, 0, na.rm = TRUE)
       # Rainfed suitability on rainfed cropland
       country_rf_suit_rf <-
         (hyde_cropland[ccells_crop] - hyde_irrigated[ccells_crop]) *
-        gaez_multicropping_suit_rf[ccells_crop]
+        ul(gaez_multicropping_suit_rf[ccells_crop])
       # Set all NAs to zero
       country_rf_suit_rf <- pmax(country_rf_suit_rf, 0, na.rm = TRUE)
       # Rainfed suitability on irrigated cropland
       country_rf_suit_ir <- hyde_irrigated[ccells_crop] *
-        gaez_multicropping_suit_rf[ccells_crop]
+        ul(gaez_multicropping_suit_rf[ccells_crop])
       # Set all NAs to zero
       country_rf_suit_ir <- pmax(country_rf_suit_ir, 0, na.rm = TRUE)
       # Crop base pattern
       country_pattern <- get(paste0("redist_country_pattern", cindex))
       # Check that saving to and loading from NetCDF has not overshot country
       # sums
-      mismatch_rf <- which(countrysum(country_rf_ha) -
-        rf_ha_year[country, dimnames(country_rf_ha)[[2]]] > 1e-8
+      mismatch_rf <- which(
+        countrysum(country_rf_ha) -
+          rf_ha_year[country, dimnames(country_rf_ha)[["item"]]] > 1e-8
       )
       for (crop in names(mismatch_rf)) {
         country_rf_ha[, crop] <- country_rf_ha[, crop] *
           rf_ha_year[country, crop] / sum(country_rf_ha[, crop])
       }
-      mismatch_ir <- which(countrysum(country_ir_ha) -
-        ir_ha_year[country, dimnames(country_ir_ha)[[2]]] > 1e-8
+      mismatch_ir <- which(
+        countrysum(country_ir_ha) -
+          ir_ha_year[country, dimnames(country_ir_ha)[["item"]]] > 1e-8
       )
       for (crop in names(mismatch_ir)) {
         country_ir_ha[, crop] <- country_ir_ha[, crop] *
           ir_ha_year[country, crop] / sum(country_ir_ha[, crop])
       }
       # Apply limitations to suitability
-      if (abs(
-        sum(country_rf_ha) - sum(country_rf_suit_rf) - sum(country_rf_suit_ir)
-      ) < 1e-4) {
+      if (
+        abs(
+          sum(country_rf_ha) - sum(country_rf_suit_rf) - sum(country_rf_suit_ir)
+        ) < 1e-4
+      ) {
         # Rainfed harvested areas require full rainfed cropland and full
         # irrigated cropland with rainfed multicropping suitability
         # This means irrigated crops are limited to
@@ -2408,7 +2803,7 @@ for (year in seq(start_year, end_year)) {
           length(mismatch_any),
           " cells (",
           round(length(mismatch_any) / length(index) * 100, 1),
-          "% of cropland cells) of",
+          "% of cropland cells) of ",
           sQuote(country)
         )
         rm(index)
@@ -2417,30 +2812,30 @@ for (year in seq(start_year, end_year)) {
 
       # Iteration counters
       i <- 1
-      rainfed_i <- rep(1, dim(tmp_rf_ha)[2])
-      irrigated_i <- rep(1, dim(tmp_ir_ha)[2])
-      names(rainfed_i) <- dimnames(tmp_rf_ha)[[2]]
-      names(irrigated_i) <- dimnames(tmp_ir_ha)[[2]]
+      rainfed_i <- rep(1, dim(tmp_rf_ha)["item"])
+      irrigated_i <- rep(1, dim(tmp_ir_ha)["item"])
+      names(rainfed_i) <- dimnames(tmp_rf_ha)[["item"]]
+      names(irrigated_i) <- dimnames(tmp_ir_ha)[["item"]]
       # Iterative process that expands harvested areas in cells where there is
       # still space until country sum is met.
       # Country sum must be met within 1e-4 ha for all crops, rainfed and
       # irrigated separately.
       # Update missing areas per crop
       diff_ir <- tmp_ir_ha_sums -
-        ir_ha_year[country, dimnames(country_ir_ha)[[2]]]
+        ir_ha_year[country, dimnames(country_ir_ha)[["item"]]]
       index <- which(is.na(diff_ir))
       diff_ir[index] <- 0
       rm(index)
       diff_rf <- tmp_rf_ha_sums -
-        rf_ha_year[country, dimnames(country_rf_ha)[[2]]]
+        rf_ha_year[country, dimnames(country_rf_ha)[["item"]]]
       index <- which(is.na(diff_rf))
       diff_rf[index] <- 0
       rm(index)
       while (
         # Either missing rainfed or irrigated harvested areas
         (any(diff_ir < (-1e-4)) || any(diff_rf < (-1e-4))) &&
-        # Not yet reached maximum number of iterations
-        i <= redist_max_it
+          # Not yet reached maximum number of iterations
+          i <= redist_max_it
       ) {
         # First start with irrigated harvested areas
         # - irrigated cropland usually smaller than rainfed cropland
@@ -2458,14 +2853,17 @@ for (year in seq(start_year, end_year)) {
         # (or not enough) in areas where crops are grown today.
         # Note: This may put crops into regions that are climatically
         # unsuitable.
-        if (i == redist_exp_thresh + 1 && any(ir_ha_year[country, ] > 0)) {
+        if (
+          i == redist_exp_thresh + 1 &&
+            any(ir_ha_year[country, country_env$ts_crops] > 0)
+        ) {
           message(
             "Allowing irrigated crop expansion outside of base pattern ",
             "to accomodate redistributed harvested areas"
           )
-          for (crop in dimnames(tmp_ir_ha)[[2]]) {
+          for (crop in dimnames(tmp_ir_ha)[["item"]]) {
             if (sum(tmp_ir_ha[, crop]) - ir_ha_year[country, crop] < -1e-4 &&
-              sum(tmp_ir_ha[, crop]) > 0
+                sum(tmp_ir_ha[, crop]) > 0
             ) {
               # Determine lowest non-zero cropping intensity and write 1/10
               # of that into cells that have irrigated cropland but no
@@ -2517,9 +2915,9 @@ for (year in seq(start_year, end_year)) {
         # Determine which crops need expansion of harvested areas.
         # Only increase areas of crops that are below their prescribed country
         # sum.
-        incr <- rep(0, dim(tmp_ir_ha)[2])
+        incr <- rep(0, dim(tmp_ir_ha)["item"])
         croplist <- which(
-          ir_ha_year[country, dimnames(tmp_ir_ha)[[2]]] - tmp_ir_ha_sums > 0
+          ir_ha_year[country, dimnames(tmp_ir_ha)[["item"]]] - tmp_ir_ha_sums > 0
         )
         incr[croplist] <- 1
         rm(croplist)
@@ -2528,15 +2926,17 @@ for (year in seq(start_year, end_year)) {
           # Magnitude of increment depends on how much of the crop area is
           # missing. Increment decreases as values approach target country sum
           # (to avoid overshooting too much).
-          incr <- incr * (1 - ifelse(
-            ir_ha_year[country, dimnames(tmp_ir_ha)[[2]]] > 0,
-            tmp_ir_ha_sums / ir_ha_year[country, dimnames(tmp_ir_ha)[[2]]],
-            0
-          ))
+          incr <- incr * (
+            1 - ifelse(
+              ir_ha_year[country, dimnames(tmp_ir_ha)[["item"]]] > 0,
+              tmp_ir_ha_sums / ir_ha_year[country, dimnames(tmp_ir_ha)[["item"]]],
+              0
+            )
+          )
 
           # Expand increment vector per crop to all cells.
           incr2 <- tmp_ir_ha
-          for (r in seq_len(dim(incr2)[2])) {
+          for (r in seq_len(dim(incr2)["item"])) {
             incr2[, r] <- incr[r]
           }
           incr <- incr2
@@ -2561,7 +2961,7 @@ for (year in seq(start_year, end_year)) {
           index <- which(tmp_ir_suit > 0)
           tmp_suit <- rep(
             tmp_ir_suit[index],
-            dim(tmp_ir_ha)[2]
+            dim(tmp_ir_ha)["item"]
           )
           tmp_ir_ha[index, ] <- tmp_ir_ha[index, ] / tmp_suit
           rm(index, tmp_suit)
@@ -2593,7 +2993,7 @@ for (year in seq(start_year, end_year)) {
           # multiply with available space to get back to harvested areas
           tmp_suit <- rep(
             tmp_ir_suit,
-            dim(tmp_ir_ha)[2]
+            dim(tmp_ir_ha)["item"]
           )
           tmp_ir_ha <- logistic_trans(tmp_ir_ha + incr) * tmp_suit
           rm(incr, tmp_suit)
@@ -2602,8 +3002,8 @@ for (year in seq(start_year, end_year)) {
           # crop; if so, apply only a fraction of increment
           fact <- pmax(
             pmin(
-              (ir_ha_year[country, dimnames(tmp_ir_ha)[[2]]] -
-                country_ir_ha_sums) / countrysum(tmp_ir_ha - country_ir_ha),
+              (ir_ha_year[country, dimnames(tmp_ir_ha)[["item"]]] -
+                 country_ir_ha_sums) / countrysum(tmp_ir_ha - country_ir_ha),
               1,
               na.rm = TRUE
               # Constrain fact not to exceed 1
@@ -2612,12 +3012,12 @@ for (year in seq(start_year, end_year)) {
             na.rm = TRUE
             # Constrain fact not to go below zero
           )
-          index <- which(ir_ha_year[country, dimnames(tmp_ir_ha)[[2]]] == 0)
+          index <- which(ir_ha_year[country, dimnames(tmp_ir_ha)[["item"]]] == 0)
           fact[index] <- 0
           rm(index)
           # fact is between 0 and 1, country_ir_ha has crop-specific harvested
           # areas before increase.
-          for (r in seq_len(dim(tmp_ir_ha)[2])) {
+          for (r in seq_len(dim(tmp_ir_ha)["item"])) {
             tmp_ir_ha[, r] <- (tmp_ir_ha[, r] - country_ir_ha[, r]) * fact[r] +
               country_ir_ha[, r]
           }
@@ -2668,25 +3068,26 @@ for (year in seq(start_year, end_year)) {
 
         # Update missing areas per crop
         diff_ir <- tmp_ir_ha_sums -
-          ir_ha_year[country, dimnames(country_ir_ha)[[2]]]
+          ir_ha_year[country, dimnames(country_ir_ha)[["item"]]]
         index <- which(is.na(diff_ir))
         diff_ir[index] <- 0
         rm(index)
         diff_rf <- tmp_rf_ha_sums -
-          rf_ha_year[country, dimnames(country_rf_ha)[[2]]]
+          rf_ha_year[country, dimnames(country_rf_ha)[["item"]]]
         index <- which(is.na(diff_rf))
         diff_rf[index] <- 0
         rm(index)
-        if (any(ir_ha_year[country, ] > 0)) {
+        if (any(ir_ha_year[country, country_env$ts_crops] > 0)) {
           # Once irrigated areas have been redistributed successfully or once
           # 80% of maximum number of iterations have passed check that irrigated
           # harvested area patterns leave enough space for rainfed harvested
           # areas on irrigated cropland.
           if (
             # Rainfed crops in need of redistribution
-            sum(tmp_rf_suit) - sum(rf_ha_year[country, ts_crops]) < -1e-4 &&
-            # 80% of iterations or all irrigated crops redistributed
-            (i > 0.8 * redist_max_it || all(diff_ir > (-1e-4)))
+            sum(tmp_rf_suit) - sum(rf_ha_year[country, country_env$ts_crops]) <
+              -1e-4 &&
+                # 80% of iterations or all irrigated crops redistributed
+                (i > 0.8 * redist_max_it || all(diff_ir > (-1e-4)))
           ) {
             if (all(diff_ir > (-1e-4))) {
               # All irrigated crops redistributed successfully
@@ -2707,13 +3108,14 @@ for (year in seq(start_year, end_year)) {
             # for rainfed harvested areas
             tmp_rainfed_exp <- tmp_rf_suit
             r <- 1
-            while (sum(tmp_rainfed_exp) -
-              sum(rf_ha_year[country, ts_crops]) < -1e-4
+            while (
+              sum(tmp_rainfed_exp) -
+                sum(rf_ha_year[country, country_env$ts_crops]) < -1e-4
             ) {
               tot_rf_suit <- country_rf_suit_rf + country_rf_suit_ir
               index_exp <- which(tmp_rainfed_exp > 0)
               if (sum(tot_rf_suit[index_exp]) -
-                sum(rf_ha_year[country, ts_crops]) < 0
+                  sum(rf_ha_year[country, country_env$ts_crops]) < 0
               ) {
                 # Cells where (tmp_rainfed_exp > 0) do not have enough
                 # expansion potential; need to expand to other cells.
@@ -2740,9 +3142,8 @@ for (year in seq(start_year, end_year)) {
                 # Check for overshoot
                 fact <- min(
                   1,
-                  (sum(rf_ha_year[country, ts_crops]) -
-                    sum(tot_rf_suit[index_exp])
-                  ) / sum(tmp_rainfed_filled)
+                  (sum(rf_ha_year[country, country_env$ts_crops]) -
+                     sum(tot_rf_suit[index_exp])) / sum(tmp_rainfed_filled)
                 )
                 tmp_rainfed_exp[exp_cells] <- tmp_rainfed_filled * fact
                 rm(tmp_rainfed_filled, exp_cells, fact)
@@ -2752,7 +3153,8 @@ for (year in seq(start_year, end_year)) {
               # rainfed area is missing
               incr <- max(
                 0,
-                1 - sum(tmp_rainfed_exp) / sum(rf_ha_year[country, ts_crops])
+                1 - sum(tmp_rainfed_exp) /
+                  sum(rf_ha_year[country, country_env$ts_crops])
               )
               # Logit transformation of available rainfed area / potentially
               # available rainfed area
@@ -2768,7 +3170,7 @@ for (year in seq(start_year, end_year)) {
               # Check if there is still enough space for irrigated crops
               # Unused irrigated area
               ir_exp_pot <- sum(country_ir_suit) -
-                sum(ir_ha_year[country, ], na.rm = TRUE)
+                sum(ir_ha_year[country, country_env$ts_crops], na.rm = TRUE)
               # Rainfed area that would be assigned to irrigated cropland
               rf_exp_pot <- sum(tmp_rainfed_exp - country_rf_suit_rf)
 
@@ -2776,8 +3178,8 @@ for (year in seq(start_year, end_year)) {
                 1,
                 # Currently missing rainfed area divided by potentially new
                 # rainfed area on irrigated cropland
-                (sum(rf_ha_year[country, ts_crops], na.rm = TRUE) -
-                  sum(tmp_rf_suit)) / sum(tmp_rainfed_exp - tmp_rf_suit)
+                (sum(rf_ha_year[country, country_env$ts_crops], na.rm = TRUE) -
+                   sum(tmp_rf_suit)) / sum(tmp_rainfed_exp - tmp_rf_suit)
               )
               if (ir_exp_pot - rf_exp_pot < -1e-4) {
                 tmp_rainfed_exp <- (tmp_rainfed_exp - tmp_rf_suit) * fact +
@@ -2804,7 +3206,7 @@ for (year in seq(start_year, end_year)) {
             message(
               "Added ",
               round(sum(tmp_rainfed_exp - tmp_rf_suit), 3),
-              " ", fao_area_units,
+              " ", LandInG_setup$landuse$fao_area_units,
               " to space available for rainfed harvested areas."
             )
             tmp_rf_suit <- tmp_rainfed_exp
@@ -2827,12 +3229,12 @@ for (year in seq(start_year, end_year)) {
         country_ir_ha_sums <- tmp_ir_ha_sums
         # Update missing areas per crop
         diff_ir <- tmp_ir_ha_sums -
-          ir_ha_year[country, dimnames(country_ir_ha)[[2]]]
+          ir_ha_year[country, dimnames(country_ir_ha)[["item"]]]
         index <- which(is.na(diff_ir))
         diff_ir[index] <- 0
         rm(index)
         diff_rf <- tmp_rf_ha_sums -
-          rf_ha_year[country, dimnames(country_rf_ha)[[2]]]
+          rf_ha_year[country, dimnames(country_rf_ha)[["item"]]]
         index <- which(is.na(diff_rf))
         diff_rf[index] <- 0
         rm(index)
@@ -2851,10 +3253,10 @@ for (year in seq(start_year, end_year)) {
               "Allowing rainfed crop expansion outside of base pattern ",
               "to accomodate redistributed harvested areas"
             )
-            for (crop in dimnames(tmp_rf_ha)[[2]]) {
+            for (crop in dimnames(tmp_rf_ha)[["item"]]) {
               if (
                 sum(tmp_rf_ha[, crop]) - rf_ha_year[country, crop] < -1e-4 &&
-                sum(tmp_rf_ha[, crop]) > 0
+                  sum(tmp_rf_ha[, crop]) > 0
               ) {
                 tmp_cropland <- ifelse(
                   hyde_rainfed[ccells_crop] > 0,
@@ -2925,23 +3327,27 @@ for (year in seq(start_year, end_year)) {
 
           # Determine which crops need expansion of harvested areas.
           # Only increase areas of crops with insufficient area.
-          incr <- rep(0, dim(tmp_rf_ha)[2])
+          incr <- rep(0, dim(tmp_rf_ha)["item"])
           croplist <- which(
-            rf_ha_year[country, dimnames(tmp_rf_ha)[[2]]] - tmp_rf_ha_sums > 0
+            rf_ha_year[country, dimnames(tmp_rf_ha)[["item"]]] -
+              tmp_rf_ha_sums > 0
           )
           incr[croplist] <- 1
           rm(croplist)
 
           # Magnitude of increment depends on how much of the crop area is
           # missing.
-          incr <- incr * (1 - ifelse(
-            rf_ha_year[country, dimnames(tmp_rf_ha)[[2]]] > 0,
-            tmp_rf_ha_sums / rf_ha_year[country, dimnames(tmp_rf_ha)[[2]]],
-            0
-          ))
+          incr <- incr * (
+            1 - ifelse(
+              rf_ha_year[country, dimnames(tmp_rf_ha)[["item"]]] > 0,
+              tmp_rf_ha_sums /
+                rf_ha_year[country, dimnames(tmp_rf_ha)[["item"]]],
+              0
+            )
+          )
           # Expand increment vector per crop to all cells.
           incr2 <- tmp_rf_ha
-          for (r in seq_len(dim(incr2)[2])) {
+          for (r in seq_len(dim(incr2)["item"])) {
             incr2[, r] <- incr[r]
           }
           incr <- incr2
@@ -2967,7 +3373,7 @@ for (year in seq(start_year, end_year)) {
           index <- which(tmp_rf_suit > 0)
           tmp_suit <- rep(
             tmp_rf_suit[index],
-            dim(tmp_rf_ha)[2]
+            dim(tmp_rf_ha)["item"]
           )
           tmp_rf_ha[index, ] <- tmp_rf_ha[index, ] / tmp_suit
           rm(index, tmp_suit)
@@ -2986,7 +3392,7 @@ for (year in seq(start_year, end_year)) {
           # Apply increase and transform back
           tmp_suit <- rep(
             tmp_rf_suit,
-            dim(tmp_rf_ha)[2]
+            dim(tmp_rf_ha)["item"]
           )
           tmp_rf_ha <- logistic_trans(tmp_rf_ha + incr) * tmp_suit
           rm(incr, tmp_suit)
@@ -2995,8 +3401,8 @@ for (year in seq(start_year, end_year)) {
           # crop; if so, apply only part of increase
           fact <- pmax(
             pmin(
-              (rf_ha_year[country, dimnames(tmp_rf_ha)[[2]]] -
-                country_rf_ha_sums) / countrysum(tmp_rf_ha - country_rf_ha),
+              (rf_ha_year[country, dimnames(tmp_rf_ha)[["item"]]] -
+                 country_rf_ha_sums) / countrysum(tmp_rf_ha - country_rf_ha),
               1,
               na.rm = TRUE
               # Constrain fact not to exceed 1
@@ -3005,11 +3411,11 @@ for (year in seq(start_year, end_year)) {
             na.rm = TRUE
             # Constrain fact not to go below zero
           )
-          index <- which(rf_ha_year[country, dimnames(tmp_rf_ha)[[2]]] == 0)
+          index <- which(rf_ha_year[country, dimnames(tmp_rf_ha)[["item"]]] == 0)
           fact[index] <- 0
           rm(index)
           # Fact is between 0 and 1
-          for (r in seq_len(dim(tmp_rf_ha)[2])) {
+          for (r in seq_len(dim(tmp_rf_ha)["item"])) {
             tmp_rf_ha[, r] <- (tmp_rf_ha[, r] - country_rf_ha[, r]) * fact[r] +
               country_rf_ha[, r]
           }
@@ -3046,12 +3452,12 @@ for (year in seq(start_year, end_year)) {
         }
         # Update missing areas per crop
         diff_ir <- tmp_ir_ha_sums -
-          ir_ha_year[country, dimnames(country_ir_ha)[[2]]]
+          ir_ha_year[country, dimnames(country_ir_ha)[["item"]]]
         index <- which(is.na(diff_ir))
         diff_ir[index] <- 0
         rm(index)
         diff_rf <- tmp_rf_ha_sums -
-          rf_ha_year[country, dimnames(country_rf_ha)[[2]]]
+          rf_ha_year[country, dimnames(country_rf_ha)[["item"]]]
         index <- which(is.na(diff_rf))
         diff_rf[index] <- 0
         rm(index)
@@ -3079,10 +3485,10 @@ for (year in seq(start_year, end_year)) {
         tmp_ir_ha_sums <- countrysum(tmp_ir_ha)
         # Update missing areas per crop
         diff_ir <- tmp_ir_ha_sums -
-          ir_ha_year[country, dimnames(country_ir_ha)[[2]]]
+          ir_ha_year[country, dimnames(country_ir_ha)[["item"]]]
         diff_ir[which(is.na(diff_ir))] <- 0
         diff_rf <- tmp_rf_ha_sums -
-          rf_ha_year[country, dimnames(country_rf_ha)[[2]]]
+          rf_ha_year[country, dimnames(country_rf_ha)[["item"]]]
         diff_rf[which(is.na(diff_rf))] <- 0
         # Update available space for rainfed
         tmp_suit <- pmin(
@@ -3102,8 +3508,9 @@ for (year in seq(start_year, end_year)) {
       # leave enough space for irrigated harvested areas.
       tmp_rf_ha_on_irrigated <- pmax(cellsum(tmp_rf_ha) - country_rf_suit_rf, 0)
       if (
-        sum(tmp_rf_ha_on_irrigated) + sum(ir_ha_year[country, ts_crops]) -
-          sum(tmp_ir_suit) >= 1e-4
+        sum(tmp_rf_ha_on_irrigated) +
+          sum(ir_ha_year[country, country_env$ts_crops]) - sum(tmp_ir_suit) >=
+          1e-4
       ) {
         message(
           "Emergency re-distribution of rainfed harvested areas because ",
@@ -3112,11 +3519,11 @@ for (year in seq(start_year, end_year)) {
         message(
           "Need to remove ",
           round(
-            sum(tmp_rf_ha_on_irrigated) + sum(ir_ha_year[country, ts_crops]) -
-              sum(tmp_ir_suit),
+            sum(tmp_rf_ha_on_irrigated) +
+              sum(ir_ha_year[country, country_env$ts_crops]) - sum(tmp_ir_suit),
             5
           ),
-          " ", fao_area_units,
+          " ", LandInG_setup$landuse$fao_area_units,
           " of rainfed harvested areas from irrigated cropland to ensure ",
           "enough space for irrigated harvested areas."
         )
@@ -3145,10 +3552,10 @@ for (year in seq(start_year, end_year)) {
           # Sum of rainfed harvested areas that need to be removed from
           # irrigated cropland
           excess <- sum(tmp_rf_ha_on_irrigated) +
-            sum(ir_ha_year[country, ts_crops]) - sum(tmp_ir_suit)
+            sum(ir_ha_year[country, country_env$ts_crops]) - sum(tmp_ir_suit)
           if (
             sum(tmp_rf_ha[which(tmp_rf_ha_on_irrigated > 0), crop]) > 0 &&
-            excess >= 1e-4
+              excess >= 1e-4
           ) {
             # Share of excess assigned to this crop
             crop_share_excess <- excess *
@@ -3170,11 +3577,12 @@ for (year in seq(start_year, end_year)) {
               message(
                 "Rainfed ", sQuote(crop), ": ",
                 round(sum(abs(tmp_rf_ha[, crop] - tmp_rf_ha_red[, crop])), 5),
-                " ", fao_area_units, ", ",
+                " ", LandInG_setup$landuse$fao_area_units, ", ",
                 round(
                   sum(abs(tmp_rf_ha[, crop] - tmp_rf_ha_red[, crop])) /
                     sum(tmp_rf_ha[, crop]) * 100,
-                3),
+                  3
+                ),
                 " % of crop-specific harvested area removed from ",
                 "irrigated cropland"
               )
@@ -3188,7 +3596,7 @@ for (year in seq(start_year, end_year)) {
       rm(tmp_rf_ha_on_irrigated)
       # Update missing areas per crop
       diff_rf <- tmp_rf_ha_sums -
-        rf_ha_year[country, dimnames(country_rf_ha)[[2]]]
+        rf_ha_year[country, dimnames(country_rf_ha)[["item"]]]
       diff_rf[which(is.na(diff_rf))] <- 0
 
       # If any rainfed crops are missing harvested areas, expand by filling
@@ -3200,8 +3608,9 @@ for (year in seq(start_year, end_year)) {
           "Emergency re-distribution of rainfed harvested areas because ",
           "default algorithm was not fully successful."
         )
-        if (sum(tmp_rf_suit) >
-          sum(rf_ha_year[country, dimnames(country_rf_ha)[[2]]])
+        if (
+          sum(tmp_rf_suit) >
+            sum(rf_ha_year[country, dimnames(country_rf_ha)[["item"]]])
         ) {
           # Enough space given current irrigated harvested areas.
           tmp_suit <- pmax(cellsum(tmp_rf_ha) / tmp_rf_suit, 1, na.rm = TRUE)
@@ -3220,7 +3629,7 @@ for (year in seq(start_year, end_year)) {
         tmp_rf_ha_sums <- countrysum(tmp_rf_ha)
         # Update missing areas per crop
         diff_rf <- tmp_rf_ha_sums -
-          rf_ha_year[country, dimnames(country_rf_ha)[[2]]]
+          rf_ha_year[country, dimnames(country_rf_ha)[["item"]]]
         diff_rf[which(is.na(diff_rf))] <- 0
         # First fill up rainfed cropland.
         for (crop in names(which(sort(diff_rf) < -1e-4))) {
@@ -3235,7 +3644,7 @@ for (year in seq(start_year, end_year)) {
           message(
             "Rainfed ", sQuote(crop), ": ",
             round(sum(abs(tmp_rf_ha[, crop] - country_rf_ha[, crop])), 5),
-            " ", fao_area_units, ", ",
+            " ", LandInG_setup$landuse$fao_area_units, ", ",
             round(
               sum(abs(tmp_rf_ha[, crop] - country_rf_ha[, crop])) /
                 sum(country_rf_ha[, crop]) * 100,
@@ -3248,7 +3657,7 @@ for (year in seq(start_year, end_year)) {
         tmp_rf_ha_sums <- countrysum(tmp_rf_ha)
         # Update missing areas per crop
         diff_rf <- tmp_rf_ha_sums -
-          rf_ha_year[country, dimnames(country_rf_ha)[[2]]]
+          rf_ha_year[country, dimnames(country_rf_ha)[["item"]]]
         diff_rf[which(is.na(diff_rf))] <- 0
         tmp_rf_ha_exp <- tmp_rf_ha - country_rf_ha
         # Second allow also irrigated cropland if rainfed cropland was not
@@ -3268,11 +3677,11 @@ for (year in seq(start_year, end_year)) {
             round(
               sum(
                 abs(tmp_rf_ha[, crop] - tmp_rf_ha_exp[, crop] -
-                  country_rf_ha[, crop])
+                    country_rf_ha[, crop])
               ),
               5
             ),
-            " ", fao_area_units, ", ",
+            " ", LandInG_setup$landuse$fao_area_units, ", ",
             round(
               sum(
                 abs(tmp_rf_ha[, crop] - tmp_rf_ha_exp[, crop] -
@@ -3288,7 +3697,7 @@ for (year in seq(start_year, end_year)) {
         tmp_rf_ha_sums <- countrysum(tmp_rf_ha)
         # Update missing areas per crop
         diff_rf <- tmp_rf_ha_sums -
-          rf_ha_year[country, dimnames(country_rf_ha)[[2]]]
+          rf_ha_year[country, dimnames(country_rf_ha)[["item"]]]
         diff_rf[which(is.na(diff_rf))] <- 0
 
         # Derive remaining irrigated space given final rainfed harvested areas.
@@ -3307,7 +3716,7 @@ for (year in seq(start_year, end_year)) {
         tmp_ir_ha_sums <- countrysum(tmp_ir_ha)
         # Update missing areas per crop
         diff_ir <- tmp_ir_ha_sums -
-          ir_ha_year[country, dimnames(country_ir_ha)[[2]]]
+          ir_ha_year[country, dimnames(country_ir_ha)[["item"]]]
         index <- which(is.na(diff_ir))
         diff_ir[index] <- 0
         rm(index)
@@ -3336,7 +3745,7 @@ for (year in seq(start_year, end_year)) {
           message(
             "Irrigated ", sQuote(crop), ": ",
             round(sum(abs(tmp_ir_ha[, crop] - country_ir_ha[, crop])), 5),
-            " ", fao_area_units, ", ",
+            " ", LandInG_setup$landuse$fao_area_units, ", ",
             round(
               sum(abs(tmp_ir_ha[, crop] - country_ir_ha[, crop])) /
                 sum(country_ir_ha[, crop]) * 100,
@@ -3350,7 +3759,7 @@ for (year in seq(start_year, end_year)) {
         tmp_ir_ha_sums <- countrysum(tmp_ir_ha)
         # Update missing areas per crop
         diff_ir <- tmp_ir_ha_sums -
-          ir_ha_year[country, dimnames(country_ir_ha)[[2]]]
+          ir_ha_year[country, dimnames(country_ir_ha)[["item"]]]
         index <- which(is.na(diff_ir))
         diff_ir[index] <- 0
         rm(index)
@@ -3383,15 +3792,15 @@ for (year in seq(start_year, end_year)) {
           iterations_irrigated = NA,
           has_crop_pattern = apply(
             country_pattern,
-            2,
+            "item",
             function(indata, na.rm) (any(indata > 0, na.rm = na.rm)),
             na.rm = TRUE
           )
         )
-        rownames(year_country_stats) <- dimnames(country_pattern)[[2]]
+        rownames(year_country_stats) <- dimnames(country_pattern)[["item"]]
 
-        if (country_rf_dim[2] > 0) {
-          crops <- dimnames(country_rf_ha)[[2]]
+        if (country_rf_dim["item"] > 0) {
+          crops <- dimnames(country_rf_ha)[["item"]]
           year_country_stats[crops, "total_rainfed"] <- tmp_rf_ha_sums
           year_country_stats[crops, "redistributed_rainfed"] <- countrysum(
             abs(tmp_rf_ha - get(paste0("redist_country_rf_ha", cindex)))
@@ -3404,11 +3813,11 @@ for (year in seq(start_year, end_year)) {
                 rep(
                   apply(
                     country_pattern[, crops],
-                    2,
+                    "item",
                     function(indata, na.rm) (any(indata > 0, na.rm = na.rm)),
                     na.rm = TRUE
                   ),
-                  each = dim(country_pattern)[1]
+                  each = dim(country_pattern)["cell"]
                 ),
                 ifelse(
                   !is.na(country_pattern[, crops]) &
@@ -3425,7 +3834,7 @@ for (year in seq(start_year, end_year)) {
               tmp_rf_ha * ifelse(
                 rep(
                   any(country_pattern[, crops] > 0, na.rm = TRUE),
-                  dim(country_pattern)[1]
+                  dim(country_pattern)["cell"]
                 ),
                 ifelse(
                   !is.na(country_pattern[, crops]) &
@@ -3440,8 +3849,8 @@ for (year in seq(start_year, end_year)) {
           }
           year_country_stats[crops, "iterations_rainfed"] <- rainfed_i - 1
         }
-        if (country_ir_dim[2] > 0) {
-          crops <- dimnames(country_ir_ha)[[2]]
+        if (country_ir_dim["item"] > 0) {
+          crops <- dimnames(country_ir_ha)[["item"]]
           year_country_stats[crops, "total_irrigated"] <- tmp_ir_ha_sums
           year_country_stats[crops, "redistributed_irrigated"] <- countrysum(
             abs(tmp_ir_ha - get(paste0("redist_country_ir_ha", cindex)))
@@ -3454,11 +3863,11 @@ for (year in seq(start_year, end_year)) {
                 rep(
                   apply(
                     country_pattern[, crops],
-                    2,
+                    "item",
                     function(indata, na.rm) (any(indata > 0, na.rm = na.rm)),
                     na.rm = TRUE
                   ),
-                  each = dim(country_pattern)[1]
+                  each = dim(country_pattern)["cell"]
                 ),
                 ifelse(
                   !is.na(country_pattern[, crops]) &
@@ -3475,7 +3884,7 @@ for (year in seq(start_year, end_year)) {
               tmp_ir_ha * ifelse(
                 rep(
                   any(country_pattern[, crops] > 0, na.rm = TRUE),
-                  dim(country_pattern)[1]
+                  dim(country_pattern)["cell"]
                 ),
                 ifelse(
                   !is.na(country_pattern[, crops]) &
@@ -3490,7 +3899,7 @@ for (year in seq(start_year, end_year)) {
           }
           year_country_stats[crops, "iterations_irrigated"] <- irrigated_i - 1
         }
-        redist_stats[[as.character(year)]][[country]] <- year_country_stats
+        redist_stats[[cyear]][[country]] <- year_country_stats
         rm(year_country_stats)
       }
       # Save back to country-specific variables
@@ -3525,23 +3934,34 @@ for (year in seq(start_year, end_year)) {
     # cropping factor at the end.
     for (var in c("irrigated_area_sum", "rainfed_area_sum", "total_area_sum")) {
       vals <- double(length(hyde_cropland))
-      vals[which(is.na(gadm_raster[]))] <- NA
+      vals[which(is.na(LandInG_setup$landuse$gadm_raster[]))] <- NA
       assign(var, vals)
     }
     # Crops that have been subjected to redistribution
     croplist <- names(
-      which(apply(tot_ha_year[redist_countries, ] > 0, 2, any, na.rm = TRUE))
+      which(
+        apply(tot_ha_year[redist_countries, ] > 0, "item", any, na.rm = TRUE)
+      )
     )
-    for (crop in ts_crops) {
-      tmp_rf_ha <- ncvar_get(
+    for (crop in country_env$ts_crops) {
+      tmp_rf_ha <- ncdf4::ncvar_get(
         ha_timeseries_file,
-        rainfed_output_name,
-        start = c(1, 1, which(ts_crops == crop), year - min_fileyear + 1),
-        count = c(-1, -1, 1, 1))
-      tmp_ir_ha <- ncvar_get(
+        LandInG_setup$landuse$rainfed_output_name,
+        start = c(
+          1, 1,
+          which(country_env$ts_crops == crop),
+          year - min_fileyear + 1
+        ),
+        count = c(-1, -1, 1, 1)
+      )
+      tmp_ir_ha <- ncdf4::ncvar_get(
         ha_timeseries_file,
-        irrigated_output_name,
-        start = c(1, 1, which(ts_crops == crop), year - min_fileyear + 1),
+        LandInG_setup$landuse$irrigated_output_name,
+        start = c(
+          1, 1,
+          which(country_env$ts_crops == crop),
+          year - min_fileyear + 1
+        ),
         count = c(-1, -1, 1, 1)
       )
       if (!crop %in% croplist) {
@@ -3560,12 +3980,12 @@ for (year in seq(start_year, end_year)) {
           ccells <- fao_gadm_country_cells[[country]]
           ccells_crop <- intersect(ccells, crop_cells)
           country_rf_ha <- get(paste0("redist_country_rf_ha", cindex))
-          if (crop %in% dimnames(country_rf_ha)[[2]]) {
+          if (crop %in% dimnames(country_rf_ha)[["item"]]) {
             tmp_rf_ha[ccells_crop] <- country_rf_ha[, crop]
           }
           rm(country_rf_ha)
           country_ir_ha <- get(paste0("redist_country_ir_ha", cindex))
-          if (crop %in% dimnames(country_ir_ha)[[2]]) {
+          if (crop %in% dimnames(country_ir_ha)[["item"]]) {
             tmp_ir_ha[ccells_crop] <- country_ir_ha[, crop]
           }
           rm(country_ir_ha)
@@ -3579,23 +3999,31 @@ for (year in seq(start_year, end_year)) {
           irrigated_area_sum + pmax(tmp_ir_ha, 0, na.rm = TRUE)
         )
         # 7) Save final patterns to NetCDF file.
-        ncvar_put(
+        ncdf4::ncvar_put(
           ha_timeseries_file,
-          rainfed_output_name,
+          LandInG_setup$landuse$rainfed_output_name,
           c(tmp_rf_ha),
-          start = c(1, 1, which(ts_crops == crop), year - min_fileyear + 1),
+          start = c(
+            1, 1,
+            which(country_env$ts_crops == crop),
+            year - min_fileyear + 1
+          ),
           count = c(-1, -1, 1, 1)
         )
-        ncvar_put(
+        ncdf4::ncvar_put(
           ha_timeseries_file,
-          irrigated_output_name,
+          LandInG_setup$landuse$irrigated_output_name,
           c(tmp_ir_ha),
-          start = c(1, 1, which(ts_crops == crop), year - min_fileyear + 1),
+          start = c(
+            1, 1,
+            which(country_env$ts_crops == crop),
+            year - min_fileyear + 1
+          ),
           count = c(-1, -1, 1, 1)
         )
       }
       rm(tmp_ir_ha, tmp_rf_ha)
-      gc(full = (which(ts_crops == crop) %% 5 == 0))
+      gc(full = (which(country_env$ts_crops == crop) %% 5 == 0))
     }
     total_area_sum <- rainfed_area_sum + irrigated_area_sum
 
@@ -3610,27 +4038,32 @@ for (year in seq(start_year, end_year)) {
       "Range of cropping factor this year after redistribution:",
       paste(round(range(cf, na.rm = TRUE), 2), collapse = " - "), "\n"
     )
+    exceeded <- any(
+      # Check cropping factor and absolute difference
+      cf > (3 + 1e-4) & (total_area_sum - hyde_cropland * 3 > 1e-4),
+      na.rm = TRUE
+    )
     rm(cf)
   } # End of spatial redistribution
 
   # Save harvested area sums to NetCDF file.
-  ncvar_put(
+  ncdf4::ncvar_put(
     ha_timeseries_file,
-    rainfed_output_sum_name,
+    LandInG_setup$landuse$rainfed_output_sum_name,
     c(rainfed_area_sum),
     start = c(1, 1, year - min_fileyear + 1),
     count = c(-1, -1, 1)
   )
-  ncvar_put(
+  ncdf4::ncvar_put(
     ha_timeseries_file,
-    irrigated_output_sum_name,
+    LandInG_setup$landuse$irrigated_output_sum_name,
     c(irrigated_area_sum),
     start = c(1, 1, year - min_fileyear + 1),
     count = c(-1, -1, 1)
   )
-  ncvar_put(
+  ncdf4::ncvar_put(
     ha_timeseries_file,
-    total_output_sum_name,
+    LandInG_setup$landuse$total_output_sum_name,
     c(total_area_sum),
     start = c(1, 1, year - min_fileyear + 1),
     count = c(-1, -1, 1)
@@ -3638,10 +4071,17 @@ for (year in seq(start_year, end_year)) {
   rm(irrigated_area_sum, rainfed_area_sum, total_area_sum)
   # Reload year_processed before saving in case several jobs might be
   # accessing the same file.
-  year_processed <- ncvar_get(ha_timeseries_file, "year_processed")
-  year_processed[year - min_fileyear + 1] <- 1
+  year_processed <- ncdf4::ncvar_get(ha_timeseries_file, "year_processed")
+  year_processed[year - min_fileyear + 1] <- ifelse(exceeded, 0, 1)
   # 8) Mark year as processed in NetCDF file.
-  ncvar_put(ha_timeseries_file, "year_processed", year_processed)
+  ncdf4::ncvar_put(ha_timeseries_file, "year_processed", year_processed)
+  if (exceeded) {
+    warning(
+      "Maximum cropping factor exceeds 3, not marking year ", year,
+      " as processed successfully.",
+      immediate. = TRUE, call. = FALSE
+    )
+  }
 
   # Before saving stats make sure redist_stats has not been changed by other
   # jobs accessing the same file.
@@ -3658,10 +4098,10 @@ for (year in seq(start_year, end_year)) {
   # Finish processing this year.
   if (year %in% chunk_end) {
     cat("Finalizing output file:", ha_timeseries_file$filename, "\n")
-    nc_close(ha_timeseries_file)
+    ncdf4::nc_close(ha_timeseries_file)
     rm(ha_timeseries_file)
   } else {
-    nc_sync(ha_timeseries_file)
+    ncdf4::nc_sync(ha_timeseries_file)
   }
   # Track runtime.
   runtime_stop <- proc.time()
@@ -3679,6 +4119,6 @@ for (year in seq(start_year, end_year)) {
 }
 # Close any NetCDF files that might still be open.
 if (exists("ha_timeseries_file")) {
-  nc_close(ha_timeseries_file)
+  ncdf4::nc_close(ha_timeseries_file)
 }
-nc_close(harvested_fraction_file)
+ncdf4::nc_close(harvested_fraction_file)

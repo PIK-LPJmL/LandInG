@@ -1,6 +1,5 @@
 #!/bin/bash
 #SBATCH --qos=short
-#SBATCH --partition=standard
 #SBATCH --account=lpjml
 #SBATCH --job-name=HYDE_conversion
 #SBATCH --output=inttime_merge.%j.out
@@ -15,7 +14,10 @@
 ## Contact: https://github.com/PIK-LPJmL/LandInG/                             ##
 ################################################################################
 
-module load cdo/1.7.1
-module load nco/4.6.8 
+if [ -d /p/system/lenovo/ctt ]; then
+  # Load modules for PIK 2024 high-performance computer
+  module load cdo/2.4.4
+  module load nco/5.1.9
+fi
 
 ./step3_hyde_interpol_merge.sh

@@ -105,7 +105,10 @@ setup_nes_groups <- function(croplist, item_group_def, drop_crops = NULL) {
   )
   if (!is.null(crop_name)) {
     nes_crops[[crop_name]] <- grep(
-      paste(c("avocado", "dates", "mango","papaya", "pineapple"), collapse = "|"),
+      paste(
+        c("avocado", "dates", "mango", "papaya", "pineapple"),
+        collapse = "|"
+      ),
       item_group_def$Item,
       value = TRUE,
       ignore.case = TRUE
@@ -218,7 +221,7 @@ setup_nes_groups <- function(croplist, item_group_def, drop_crops = NULL) {
       nes_crops[[n]] <- setdiff(nes_crops[[n]], drop_crops)
     }
     # Check that all crops belonging to nes group are in
-    # fao_monfreda_production_array
+    # croplist
     crops <- intersect(
       nes_crops[[n]],
       croplist
@@ -247,7 +250,7 @@ nes_name <- function(croplist, pattern) {
       "No crop name found matching pattern ", sQuote(pattern),
       immediate. = TRUE
     )
-    return (NULL)
+    return(NULL)
   } else if (length(crop_name) > 1) {
     warning(
       length(crop_name), "crop names found matching pattern ", sQuote(pattern),

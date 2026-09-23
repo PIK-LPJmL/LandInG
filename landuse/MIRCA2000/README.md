@@ -7,8 +7,7 @@ MIRCA2000 is released by Goethe-Universität in Frankfurt/Main.
 ## Input
 Website: https://www.uni-frankfurt.de/45218023/MIRCA
 
-Download page: 
-https://www.uni-frankfurt.de/45218031/Data_download_center_for_MIRCA2000
+Download page: [DOI 10.5281/zenodo.7422506](https://doi.org/10.5281/zenodo.7422506)
 
 ## Files included in this directory
 - mirca_names.txt: This file lists the names of crops included in MIRCA2000 at

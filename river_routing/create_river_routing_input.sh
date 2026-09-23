@@ -29,5 +29,10 @@ LPJGRID=""
 DDMASCII=""
 RIVERROUTINGFILE=""
 
+if [ -d /p/system/lenovo/ctt ]; then
+  # Load modules for PIK 2024 high-performance computer
+  source ../R_env_PIK.sh
+fi
+
 ## Convert drainage direction map into LPJmL river routing input
 $DRAINAGEBIN "$LPJGRID" "$DDMASCII" "$RIVERROUTINGFILE"

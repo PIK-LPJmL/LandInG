@@ -110,12 +110,12 @@ pattern_admin_replacement <- rbind(
 parallel_mpi <- parallel_local <- FALSE # Not to be set by user
 if (cluster) {
   # Try parallelization
-  if (require(Rmpi)) {
+  if ("Rmpi" %in% .packages(all.available = TRUE)) {
     # Rmpi = R implementation of MPI interface
     # This is intended for parallelization on high-performance cluster.
-    if (require(doMPI)) {
+    if ("doMPI" %in% .packages(all.available = TRUE)) {
       # doMPI = interface for foreach construct to run in MPI parallel mode
-       # Start MPI cluster (link R instances together)
+      # Start MPI cluster (link R instances together)
       cl <- doMPI::startMPIcluster()
       # Number of R instances linked together
       num_cluster <- doMPI::clusterSize(cl)
@@ -128,7 +128,7 @@ if (cluster) {
       } else {
         # Only one task
         # Tell foreach to use sequential mode
-        registerDoSEQ()
+        foreach::registerDoSEQ()
         cat("Running in sequential mode because only one node is available.\n")
         num_cluster <- 1
       }
@@ -140,11 +140,11 @@ if (cluster) {
         call. = FALSE,
         immediate. = TRUE
       )
-      registerDoSEQ() # Tell foreach to use sequential mode
+      foreach::registerDoSEQ() # Tell foreach to use sequential mode
       cat("Falling back to running in sequential mode.\n")
       num_cluster <- 1
     }
-  } else if (require(doParallel)) {
+  } else if ("doParallel" %in% .packages(all.available = TRUE)) {
     # Try parallelization through parallel package.
     # This is probably more suitable to run in parallel on a local machine
     # Get number of CPU cores
@@ -162,12 +162,12 @@ if (cluster) {
       # Start cluster on local machine
       cl <- parallel::makeCluster(num_cluster)
       # Tell foreach to use this cluster
-      registerDoParallel(num_cluster)
+      doParallel::registerDoParallel(cl)
       parallel_local <- TRUE
       cat("Running in parallel mode on", num_cluster, "CPUs\n")
     } else {
       # Only one task
-      registerDoSEQ() # Tell foreach to use sequential mode
+      foreach::registerDoSEQ() # Tell foreach to use sequential mode
       cat("Running in sequential mode because only one CPU is available.\n")
     }
   } else {
@@ -179,14 +179,13 @@ if (cluster) {
       call. = FALSE,
       immediate. = TRUE
     )
-    registerDoSEQ() # Tells foreach to use sequential mode
+    foreach::registerDoSEQ() # Tells foreach to use sequential mode
     cat("Falling back to running in sequential mode.\n")
     num_cluster <- 1
   }
 } else {
   # Do not try parallelization
-  library(foreach)
-  registerDoSEQ() # Tells foreach to use sequential mode
+  foreach::registerDoSEQ() # Tells foreach to use sequential mode
   cat("Running in sequential mode.\n")
   num_cluster <- 1
 }
@@ -196,44 +195,51 @@ if (cluster) {
 ################################################################################
 ## Load spatial units                                                         ##
 # Fertilizer patterns
-if (fertilizer_pattern_admin == "gadm") {
-  cat("Admin units for patterns loaded from", sQuote(gadmlevel_file), "\n")
-  pattern_admin_raster <- brick(gadmlevel_file)
+if (LandInG_setup$fertilizer$fertilizer_pattern_admin == "gadm") {
+  cat(
+    "Admin units for patterns loaded from",
+    sQuote(LandInG_setup$fertilizer$gadmlevel_file), "\n"
+  )
+  pattern_admin_raster <- terra::rast(
+    LandInG_setup$fertilizer$gadmlevel_file,
+    subds = LandInG_setup$fertilizer$gadmlevel_variable
+  )
   pattern_admin_names <- read.csv(
-    gadmlevel_names_file,
+    LandInG_setup$fertilizer$gadmlevel_names_file,
     stringsAsFactors = FALSE,
     comment.char = "#"
   )
-  if (ncol(pattern_admin_names) != nlayers(pattern_admin_raster) * 3) {
+  if (ncol(pattern_admin_names) != terra::nlyr(pattern_admin_raster) * 3) {
     stop(
-      paste(
-        "Admin unit names from", gadmlevel_names_file, "do not seem to match",
-        "admin unit layers from", gadmlevel_file
-      )
+      "Admin unit names from ", LandInG_setup$fertilizer$gadmlevel_names_file,
+      " do not seem to match admin unit layers from ",
+      LandInG_setup$fertilizer$gadmlevel_file
     )
   }
   # Spatial resolution of admin mask.
-  pattern_admin_res <- res(pattern_admin_raster)
+  pattern_admin_res <- terra::res(pattern_admin_raster)
   # Column name in country grouping that contains matching codes
-  pattern_country_grouping_col <- gadm_country_col
-} else if (fertilizer_pattern_admin == "luh2") {
-  cat("Admin units for patterns loaded from", sQuote(luh2country_file), "\n")
-  pattern_admin_raster <- brick(
-    luh2country_file,
-    varname = luh2country_variable,
-    band = luh2country_layer
+  pattern_country_grouping_col <- LandInG_setup$fertilizer$gadm_country_col
+} else if (LandInG_setup$fertilizer$fertilizer_pattern_admin == "luh2") {
+  cat(
+    "Admin units for patterns loaded from",
+    sQuote(LandInG_setup$fertilizer$luh2country_file), "\n"
+  )
+  pattern_admin_raster <- terra::rast(
+    LandInG_setup$fertilizer$luh2country_file,
+    subds = LandInG_setup$fertilizer$luh2country_variable,
+    lyrs = LandInG_setup$fertilizer$luh2country_layer
   )
   pattern_admin_names <- NULL
   # Spatial resolution of admin mask.
-  pattern_admin_res <- res(pattern_admin_raster)
+  pattern_admin_res <- terra::res(pattern_admin_raster)
   # Column name in country grouping that contains matching codes
-  pattern_country_grouping_col <- luh2_country_col
+  pattern_country_grouping_col <- LandInG_setup$fertilizer$luh2_country_col
 } else {
-    stop(
-    paste(
-      "Undefined fertilizer_pattern_admin", sQuote(fertilizer_pattern_admin),
-      "\nCheck fertilizer_setup.R"
-    )
+  stop(
+    "Undefined fertilizer_pattern_admin ",
+    sQuote(LandInG_setup$fertilizer$fertilizer_pattern_admin),
+    "\nCheck fertilizer_setup.R"
   )
 }
 if (!is.null(pattern_admin_names)) {
@@ -273,22 +279,18 @@ if (!is.null(pattern_admin_names)) {
     )
   }
 }
-if (nlayers(pattern_admin_raster) == 1) {
-  # Reduce brick to raster layer in case of only one layer because single-layer
-  # bricks cause problems in raster package code.
-  pattern_admin_raster <- subset(pattern_admin_raster, 1)
-} else {
+if (terra::nlyr(pattern_admin_raster) > 1) {
   # Try to find country layer. Assumption is that country layer has lowest
   # number of unique admin unit codes
   pattern_national_band <- find_national_band(pattern_admin_raster)
   # Reduce to country layer
   cat(
     "Extracting layer ", pattern_national_band, " from ",
-    nlayers(pattern_admin_raster), "-band ",
-    "pattern_admin_raster as national band.",
+    terra::nlyr(pattern_admin_raster), "-band ",
+    "pattern_admin_raster as national band.\n",
     sep = ""
   )
-  pattern_admin_raster <- subset(
+  pattern_admin_raster <- terra::subset(
     pattern_admin_raster,
     pattern_national_band
   )
@@ -300,53 +302,59 @@ if (nlayers(pattern_admin_raster) == 1) {
 }
 
 # Fertilizer trends
-if (!fertilizer_trend_is_national) {
+if (!LandInG_setup$fertilizer$fertilizer_trend_is_national) {
   stop(
-    paste(
-      "This script is intended for national fertilizer trend data but",
-      "fertilizer_trend_is_national is FALSE.",
-      "\nUse combine_fertilizer_pattern_trend_subnational.R or switch",
-      "fertilizer_trend_is_national setting and rerun",
-      "gapfill_fertilizer_trend.R"
-    )
+    "This script is intended for national fertilizer trend data but ",
+    "fertilizer_trend_is_national is FALSE.",
+    "\nUse combine_fertilizer_pattern_trend_subnational.R or switch ",
+    "fertilizer_trend_is_national setting and rerun ",
+    "gapfill_fertilizer_trend.R"
   )
 }
-if (fertilizer_trend_admin == "gadm") {
-  cat("Admin units for trends loaded from", sQuote(gadmlevel_file), "\n")
-  trend_admin_raster <- brick(gadmlevel_file)
+if (LandInG_setup$fertilizer$fertilizer_trend_admin == "gadm") {
+  cat(
+    "Admin units for trends loaded from",
+    sQuote(LandInG_setup$fertilizer$gadmlevel_file), "\n"
+  )
+  trend_admin_raster <- terra::rast(
+    LandInG_setup$fertilizer$gadmlevel_file,
+    subds = LandInG_setup$fertilizer$gadmlevel_variable
+  )
   trend_admin_names <- read.csv(
-    gadmlevel_names_file,
+    LandInG_setup$fertilizer$gadmlevel_names_file,
     stringsAsFactors = FALSE,
     comment.char = "#"
   )
   # Spatial resolution of admin mask.
-  trend_admin_res <- res(trend_admin_raster)
+  trend_admin_res <- terra::res(trend_admin_raster)
   # Column name in country grouping that contains matching codes
-  trend_country_grouping_col <- gadm_country_col
-} else if (fertilizer_trend_admin == "luh2") {
-  cat("Admin units for trends loaded from", sQuote(luh2country_file), "\n")
-  trend_admin_raster <- brick(
-    luh2country_file,
-    varname = luh2country_variable,
-    band = luh2country_layer
+  trend_country_grouping_col <- LandInG_setup$fertilizer$gadm_country_col
+} else if (LandInG_setup$fertilizer$fertilizer_trend_admin == "luh2") {
+  cat(
+    "Admin units for trends loaded from",
+    sQuote(LandInG_setup$fertilizer$luh2country_file), "\n"
+  )
+  trend_admin_raster <- terra::rast(
+    LandInG_setup$fertilizer$luh2country_file,
+    subds = LandInG_setup$fertilizer$luh2country_variable,
+    lyrs = LandInG_setup$fertilizer$luh2country_layer
   )
   trend_admin_names <- NULL
   # Spatial resolution of admin mask.
-  trend_admin_res <- res(trend_admin_raster)
+  trend_admin_res <- terra::res(trend_admin_raster)
   # Column name in country grouping that contains matching codes
-  trend_country_grouping_col <- luh2_country_col
+  trend_country_grouping_col <- LandInG_setup$fertilizer$luh2_country_col
 } else {
   stop(
-    paste(
-      "Undefined fertilizer_trend_admin", sQuote(fertilizer_trend_admin),
-      "\nCheck fertilizer_setup.R"
-    )
+    "Undefined fertilizer_trend_admin ",
+    sQuote(LandInG_setup$fertilizer$fertilizer_trend_admin),
+    "\nCheck fertilizer_setup.R"
   )
 }
 # Number of admin unit levels. Used to interpret gapfill_level in gap-filled
 # trend data. By default, gapfill_pattern() assumes 3 admin units. Set higher if
 # you used more admin levels during gap-filling. Do not set lower.
-trend_unit_levels <- max(3, nlayers(trend_admin_raster))
+trend_unit_levels <- max(3, terra::nlyr(trend_admin_raster))
 
 if (!is.null(trend_admin_names)) {
   # Note this is currently only supported for the GADM level 0-2 raster and
@@ -385,22 +393,18 @@ if (!is.null(trend_admin_names)) {
     )
   }
 }
-if (nlayers(trend_admin_raster) == 1) {
-  # Reduce brick to raster layer in case of only one layer because single-layer
-  # bricks cause problems in raster package code.
-  trend_admin_raster <- subset(trend_admin_raster, 1)
-} else {
+if (terra::nlyr(trend_admin_raster) > 1) {
   # Try to find country layer. Assumption is that country layer has lowest
   # number of unique admin unit codes
   trend_national_band <- find_national_band(trend_admin_raster)
   # Reduce to country layer
   cat(
     "Extracting layer ", trend_national_band, " from ",
-    nlayers(trend_admin_raster), "-band ",
-    "trend_admin_raster as national band.",
+    terra::nlyr(trend_admin_raster), "-band ",
+    "trend_admin_raster as national band.\n",
     sep = ""
   )
-  trend_admin_raster <- subset(
+  trend_admin_raster <- terra::subset(
     trend_admin_raster,
     trend_national_band
   )
@@ -410,28 +414,33 @@ if (nlayers(trend_admin_raster) == 1) {
     trend_admin_names <- trend_admin_names[, col]
   }
 }
-if (!anyNA(values(pattern_admin_raster)) && fertilizer_pattern_strip_zero) {
+if (!anyNA(terra::values(pattern_admin_raster)) &&
+    LandInG_setup$fertilizer$fertilizer_pattern_strip_zero
+) {
   message(
     "Info: pattern_admin_raster does not contain any NAs and",
     "fertilizer_pattern_strip_zero is TRUE. Replacing 0 with NA in admin",
     "data."
   )
-  pattern_admin_raster <- mask(
+  pattern_admin_raster <- terra::mask(
     pattern_admin_raster,
     pattern_admin_raster,
-    maskvalue = 0
+    maskvalues = 0
   )
 }
-if (!anyNA(values(trend_admin_raster)) && fertilizer_trend_strip_zero) {
+if (
+  !anyNA(terra::values(trend_admin_raster)) &&
+    LandInG_setup$fertilizer$fertilizer_trend_strip_zero
+) {
   message(
     "Info: trend_admin_raster does not contain any NAs and ",
     "fertilizer_trend_strip_zero is TRUE. Replacing 0 with NA in admin ",
     "data."
   )
-  trend_admin_raster <- mask(
+  trend_admin_raster <- terra::mask(
     trend_admin_raster,
     trend_admin_raster,
-    maskvalue = 0
+    maskvalues = 0
   )
 }
 ################################################################################
@@ -440,15 +449,19 @@ if (!anyNA(values(trend_admin_raster)) && fertilizer_trend_strip_zero) {
 ################################################################################
 ## Load country grouping and crop list                                        ##
 # Country grouping
-if (file.exists(country_group_file)) {
-  cat("Country groups loaded from", sQuote(country_group_file), "\n")
-  country_group_data <- read.csv(country_group_file, stringsAsFactors = FALSE)
+if (file.exists(LandInG_setup$fertilizer$country_group_file)) {
+  cat(
+    "Country groups loaded from",
+    sQuote(LandInG_setup$fertilizer$country_group_file), "\n"
+  )
+  country_group_data <- read.csv(
+    LandInG_setup$fertilizer$country_group_file,
+    stringsAsFactors = FALSE
+  )
 } else {
   stop(
-    paste(
-      "Country groups file", country_group_file, "does not exist.",
-      "\nPlease check fertilizer_setup.R"
-    )
+    "Country groups file ", LandInG_setup$fertilizer$country_group_file,
+    "does not exist.\nPlease check fertilizer_setup.R"
   )
 }
 # Find column containing 3-letter ISO codes in country_group_data
@@ -457,10 +470,8 @@ country_group_iso3_col <- grep(
 )
 if (length(country_group_iso3_col) != 1) {
   stop(
-    paste(
-      "Cannot detect column containing 3-letter ISO code in data loaded from",
-      country_group_file
-    )
+    "Cannot detect column containing 3-letter ISO code in data loaded from ",
+    LandInG_setup$fertilizer$country_group_file
   )
 }
 # Find country name column in country_group_data
@@ -469,27 +480,33 @@ country_group_name_col <- grep(
 )
 if (length(country_group_name_col) != 1) {
   stop(
-    paste(
-      "Cannot detect column containing country name in data loaded from",
-      country_group_file
-    )
+    "Cannot detect column containing country name in data loaded from ",
+    LandInG_setup$fertilizer$country_group_file
   )
 }
 
 # Apply user-defined code additions to country_group_data.
-if (fertilizer_pattern_admin == "gadm" || fertilizer_trend_admin == "gadm" &&
-  exists("add_list_gadm")
+if (LandInG_setup$fertilizer$fertilizer_pattern_admin == "gadm" ||
+    LandInG_setup$fertilizer$fertilizer_trend_admin == "gadm" &&
+    !is.null(LandInG_setup$fertilizer$add_list_gadm)
 ) {
-  # Apply user-defined code additions. 
+  # Apply user-defined code additions.
   # add_list_gadm defined in helper/fix_admin_masks.R
-  country_group_data <- add_to_country_list(country_group_data, add_list_gadm)
+  country_group_data <- add_to_country_list(
+    country_group_data,
+    LandInG_setup$fertilizer$add_list_gadm
+  )
 }
-if (fertilizer_pattern_admin == "luh2" || fertilizer_trend_admin == "luh2" &&
-  exists("add_list_luh2")
+if (LandInG_setup$fertilizer$fertilizer_pattern_admin == "luh2" ||
+    LandInG_setup$fertilizer$fertilizer_trend_admin == "luh2" &&
+    !is.null(LandInG_setup$fertilizer$add_list_luh2)
 ) {
-  # Apply user-defined code additions. 
+  # Apply user-defined code additions.
   # add_list_luh2 defined in helper/fix_admin_masks.R
-  country_group_data <- add_to_country_list(country_group_data, add_list_luh2)
+  country_group_data <- add_to_country_list(
+    country_group_data,
+    LandInG_setup$fertilizer$add_list_luh2
+  )
 }
 
 # Check that country_group_data has columns matching codes used in fertilizer
@@ -502,7 +519,7 @@ if (!pattern_country_grouping_col %in% colnames(country_group_data)) {
       colnames(country_group_data),
       ignore.case = TRUE
     )
-  ) == 1
+    ) == 1
   ) {
     message(
       "Replace pattern_country_grouping_col ",
@@ -525,11 +542,9 @@ if (!pattern_country_grouping_col %in% colnames(country_group_data)) {
     )
   } else {
     stop(
-      paste(
-        "Column pattern_country_grouping_col",
-        sQuote(pattern_country_grouping_col),
-        "missing in country_group_data"
-      )
+      "Column pattern_country_grouping_col ",
+      sQuote(pattern_country_grouping_col),
+      " missing in country_group_data"
     )
   }
 }
@@ -541,7 +556,7 @@ if (!trend_country_grouping_col %in% colnames(country_group_data)) {
       colnames(country_group_data),
       ignore.case = TRUE
     )
-  ) == 1
+    ) == 1
   ) {
     message(
       "Replace trend_country_grouping_col ",
@@ -564,11 +579,9 @@ if (!trend_country_grouping_col %in% colnames(country_group_data)) {
     )
   } else {
     stop(
-      paste(
-        "Column trend_country_grouping_col",
-        sQuote(trend_country_grouping_col),
-        "missing in country_group_data"
-      )
+      "Column trend_country_grouping_col ",
+      sQuote(trend_country_grouping_col),
+      " missing in country_group_data"
     )
   }
 }
@@ -581,28 +594,27 @@ if (
 ) {
   # Not all rows have unique value
   stop(
-    paste(
-      "Not all rows in country_group_data have unique value for column",
-      "pattern_country_grouping_col", sQuote(pattern_country_grouping_col)
-    )
+    "Not all rows in country_group_data have unique value for column ",
+    "pattern_country_grouping_col", sQuote(pattern_country_grouping_col)
   )
 }
 
 if (!is.null(pattern_admin_names)) {
-  if (!all(na.omit(values(pattern_admin_raster)) %in%
-    pattern_admin_names[, pattern_id_col])
+  if (
+    !all(
+      na.omit(terra::values(pattern_admin_raster)) %in%
+        pattern_admin_names[, pattern_id_col]
+    )
   ) {
     # Mismatch between pattern_admin_raster and pattern_admin_names
     stop(
-      paste(
-        "Codes used in pattern_admin_raster do not match codes in",
-        "pattern_admin_names"
-      )
+      "Codes used in pattern_admin_raster do not match codes in ",
+      "pattern_admin_names"
     )
   }
   # Determine ISO codes of countries
   iso_r <- match(
-    unique(na.omit(values(pattern_admin_raster))),
+    unique(na.omit(terra::values(pattern_admin_raster))),
     pattern_admin_names[, pattern_id_col]
   )
   pattern_admin_iso <- pattern_admin_names[iso_r, pattern_iso_col]
@@ -612,12 +624,14 @@ if (!is.null(pattern_admin_names)) {
     pattern_admin_iso,
     country_group_data[, country_group_iso3_col]
   )
-  if (fertilizer_pattern_admin == "gadm" && exists("ccode_replacement_gadm")) {
+  if (LandInG_setup$fertilizer$fertilizer_pattern_admin == "gadm" &&
+      !is.null(LandInG_setup$fertilizer$ccode_replacement_gadm)
+  ) {
     # Include any replacement rules that may be set up in
     # helper/fix_admin_masks.R
     pattern_admin_mismatch <- union(
       pattern_admin_mismatch,
-      ccode_replacement_gadm$source
+      LandInG_setup$fertilizer$ccode_replacement_gadm$source
     )
   }
   # Also do any replacements set up in pattern_admin_replacement in this script
@@ -631,13 +645,17 @@ if (!is.null(pattern_admin_names)) {
     source_name <- pattern_admin_names[iso_r, pattern_name_col]
     source_code <- pattern_admin_names[iso_r, pattern_id_col]
     # First check ccode_replacement_gadm for possible replacement entry.
-    if (fertilizer_pattern_admin == "gadm" &&
-      exists("ccode_replacement_gadm") &&
-      isocode %in% ccode_replacement_gadm$source
+    if (LandInG_setup$fertilizer$fertilizer_pattern_admin == "gadm" &&
+        !is.null(LandInG_setup$fertilizer$ccode_replacement_gadm) &&
+        isocode %in% LandInG_setup$fertilizer$ccode_replacement_gadm$source
     ) {
       # Check that replacement exists in pattern_admin_names
-      source_r <- match(isocode, ccode_replacement_gadm$source)
-      replacement_iso <- ccode_replacement_gadm$replacement[source_r]
+      source_r <- match(
+        isocode,
+        LandInG_setup$fertilizer$ccode_replacement_gadm$source
+      )
+      replacement_iso <-
+        LandInG_setup$fertilizer$ccode_replacement_gadm$replacement[source_r]
       if (replacement_iso %in% pattern_admin_names[, pattern_iso_col]) {
         # Find replacement_iso in pattern_admin_names
         iso_r <- match(replacement_iso, pattern_admin_names[, pattern_iso_col])
@@ -666,13 +684,13 @@ if (!is.null(pattern_admin_names)) {
         replacement_iso,
         " (", pattern_admin_names[iso_r, pattern_name_col], ")"
       )
-    } else {      
+    } else {
       # Find all countries in fao_gadm_country_mapping that contain isocode and
       # also contain country codes actually found in country_group_data. May be
       # more than one.
       country_match <- which(
         sapply(
-          fao_gadm_country_mapping,
+          LandInG_setup$fertilizer$fao_gadm_country_mapping,
           function(codes, search, all_valid) {
             search %in% codes && any(all_valid %in% codes)
           },
@@ -682,13 +700,18 @@ if (!is.null(pattern_admin_names)) {
       )
       if (length(country_match) > 0) {
         replacement_name <- names(
-          sort(sapply(fao_gadm_country_mapping[country_match], length))
+          sort(
+            sapply(
+              LandInG_setup$fertilizer$fao_gadm_country_mapping[country_match],
+              length
+            )
+          )
         )[1]
         # Country in fao_gadm_country_mapping consists of several ISO codes.
         # Replace with first ISO code that is included in country_group_data,
         # assuming that main ISO code is listed first.
         replacement_iso <- intersect(
-          fao_gadm_country_mapping[[replacement_name]],
+          LandInG_setup$fertilizer$fao_gadm_country_mapping[[replacement_name]],
           country_group_data[, country_group_iso3_col]
         )[1]
         # Find replacement_iso in pattern_admin_names
@@ -714,10 +737,10 @@ if (!is.null(pattern_admin_names)) {
       # Find corresponding country ID in pattern_admin_raster
       iso_r <- match(replacement_iso, pattern_admin_names[, pattern_iso_col])
       replacement_code <- pattern_admin_names[iso_r, pattern_id_col]
-      pattern_admin_raster <- mask(
+      pattern_admin_raster <- terra::mask(
         pattern_admin_raster,
         pattern_admin_raster,
-        maskvalue = source_code,
+        maskvalues = source_code,
         updatevalue = replacement_code
       )
       rm(replacement_iso)
@@ -725,7 +748,7 @@ if (!is.null(pattern_admin_names)) {
   }
   # Check once more if all ISO codes in pattern_admin_raster are covered
   iso_r <- match(
-    unique(na.omit(values(pattern_admin_raster))),
+    unique(na.omit(terra::values(pattern_admin_raster))),
     pattern_admin_names[, pattern_id_col]
   )
   pattern_admin_iso <- pattern_admin_names[iso_r, pattern_iso_col]
@@ -746,28 +769,20 @@ if (!is.null(pattern_admin_names)) {
     # There are grid cells in pattern_admin_raster in countries not accounted
     # for in country_group_data or pattern_admin_replacement
     stop(
-      paste(
-        "The following countries found in pattern_admin_raster need to be",
-        "added either to country_group_data via an entry in",
-        switch(
-          fertilizer_pattern_admin,
-          gadm = sQuote("add_list_gadm"),
-          luh2 = sQuote("add_list_luh2"),
-          stop(
-            paste(
-              "Unexpected fertilizer_pattern_admin",
-              sQuote(fertilizer_pattern_admin)
-            )
-          )
-        ),
-        "or to 'pattern_admin_replacement':",
-        toString(sQuote(pattern_admin_mismatch))
-      )
+      "The following countries found in pattern_admin_raster need to be ",
+      "added either to country_group_data via an entry in ",
+      switch(
+        LandInG_setup$fertilizer$fertilizer_pattern_admin,
+        gadm = sQuote("add_list_gadm"),
+        luh2 = sQuote("add_list_luh2"),
+      ),
+      " in helper/fix_admin_masks.R or to 'pattern_admin_replacement': ",
+      toString(sQuote(pattern_admin_mismatch))
     )
   }
-} else if (fertilizer_pattern_admin == "luh2") {
+} else if (LandInG_setup$fertilizer$fertilizer_pattern_admin == "luh2") {
   # All country codes in admin unit mask
-  ccodes <- na.omit(unique(values(pattern_admin_raster)))
+  ccodes <- na.omit(unique(terra::values(pattern_admin_raster)))
   # User-defined country replacements set up in this script
   if (exists("pattern_admin_replacement")) {
     # Try to match ISO codes in pattern_admin_replacement to codes used by
@@ -785,12 +800,12 @@ if (!is.null(pattern_admin_names)) {
       ccode_source <-
         country_group_data[source_r[r], pattern_country_grouping_col]
       # LUH2 country code corresponding to replacement ISO code
-      ccode_replacement <- 
+      ccode_replacement <-
         country_group_data[replacement_r[r], pattern_country_grouping_col]
-      pattern_admin_raster <- mask(
+      pattern_admin_raster <- terra::mask(
         pattern_admin_raster,
         pattern_admin_raster,
-        maskvalue = ccode_source,
+        maskvalues = ccode_source,
         updatevalue = ccode_replacement
       )
       message(
@@ -805,51 +820,55 @@ if (!is.null(pattern_admin_names)) {
     }
   }
   rm(ccodes)
-  if (exists("ccode_replacement_luh2")) {
-    for (r in seq_len(nrow(ccode_replacement_luh2))) {
-      if (!ccode_replacement_luh2[r, "source"] %in%
-        country_group_data[, pattern_country_grouping_col] &&
-        ccode_replacement_luh2[r, "replacement"] %in%
-        country_group_data[, pattern_country_grouping_col]
+  if (!is.null(LandInG_setup$fertilizer$ccode_replacement_luh2)) {
+    for (r in seq_len(nrow(LandInG_setup$fertilizer$ccode_replacement_luh2))) {
+      if (!LandInG_setup$fertilizer$ccode_replacement_luh2[r, "source"] %in%
+          country_group_data[, pattern_country_grouping_col] &&
+          LandInG_setup$fertilizer$ccode_replacement_luh2[r, "replacement"] %in%
+            country_group_data[, pattern_country_grouping_col]
       ) {
         replacement_r <- match(
-          ccode_replacement_luh2[r, "replacement"],
+          LandInG_setup$fertilizer$ccode_replacement_luh2[r, "replacement"],
           country_group_data[, pattern_country_grouping_col]
         )
         message(
           "User-defined country replacement ",
-          sQuote(ccode_replacement_luh2[r, "source"]), " -> ",
-          sQuote(ccode_replacement_luh2[r, "replacement"]),
+          sQuote(LandInG_setup$fertilizer$ccode_replacement_luh2[r, "source"]),
+          " -> ",
+          sQuote(
+            LandInG_setup$fertilizer$ccode_replacement_luh2[r, "replacement"]
+          ),
           "(",
           sQuote(country_group_data[replacement_r, country_group_name_col]),
           ")"
         )
-        pattern_admin_raster <- mask(
+        pattern_admin_raster <- terra::mask(
           pattern_admin_raster,
           pattern_admin_raster,
-          maskvalue = ccode_replacement_luh2[r, "source"],
-          updatevalue = ccode_replacement_luh2[r, "replacement"]
+          maskvalues =
+            LandInG_setup$fertilizer$ccode_replacement_luh2[r, "source"],
+          updatevalue =
+            LandInG_setup$fertilizer$ccode_replacement_luh2[r, "replacement"]
         )
       }
     }
   }
   # Check country codes in admin unit mask again
-  ccodes <- na.omit(unique(values(pattern_admin_raster)))
+  ccodes <- na.omit(unique(terra::values(pattern_admin_raster)))
   if (!all(ccodes %in% country_group_data[, pattern_country_grouping_col]) &&
-    fertilizer_trend_admin != fertilizer_pattern_admin
+      LandInG_setup$fertilizer$fertilizer_trend_admin !=
+        LandInG_setup$fertilizer$fertilizer_pattern_admin
   ) {
     # Cannot ensure that all admin units in fertilizer patterns can be matched
     # to an admin unit in trend data.
     stop(
-      paste(
-        "The following countries found in pattern_admin_raster need to be",
-        "added to country_group_data via an entry in 'add_list_luh2'",
-        "or need to be replaced by a different country code via an entry in",
-        "'ccode_replacement_luh2':",
-        toString(
-          sQuote(
-            setdiff(ccodes, country_group_data[, pattern_country_grouping_col])
-          )
+      "The following countries found in pattern_admin_raster need to be ",
+      "added to country_group_data via an entry in 'add_list_luh2' ",
+      "or need to be replaced by a different country code via an entry in ",
+      "'ccode_replacement_luh2': ",
+      toString(
+        sQuote(
+          setdiff(ccodes, country_group_data[, pattern_country_grouping_col])
         )
       )
     )
@@ -857,23 +876,26 @@ if (!is.null(pattern_admin_names)) {
   rm(ccodes)
 } else {
   stop(
-    paste(
-      "Unsupported fertilizer_pattern_admin", sQuote(fertilizer_pattern_admin),
-      "without corresponding names file."
-    )
+    "Unsupported fertilizer_pattern_admin ",
+    sQuote(LandInG_setup$fertilizer$fertilizer_pattern_admin),
+    " without corresponding names file."
   )
 }
 
 # Crop list
-if (file.exists(mapping_file)) {
-  cat("Crop type mapping loaded from", sQuote(mapping_file), "\n")
-  crop_type_mapping <- read.csv(mapping_file, stringsAsFactors = FALSE)
+if (file.exists(LandInG_setup$fertilizer$mapping_file)) {
+  cat(
+    "Crop type mapping loaded from",
+    sQuote(LandInG_setup$fertilizer$mapping_file), "\n"
+  )
+  crop_type_mapping <- read.csv(
+    LandInG_setup$fertilizer$mapping_file,
+    stringsAsFactors = FALSE
+  )
 } else {
   stop(
-    paste(
-      "Mapping file", mapping_file, "does not exist.",
-      "\nPlease check fertilizer_setup.R"
-    )
+    "Mapping file ", LandInG_setup$fertilizer$mapping_file, "does not exist.",
+    "\nPlease check fertilizer_setup.R"
   )
 }
 # Convert any special characters to ASCII
@@ -882,9 +904,9 @@ for (table in c("country_group_data", "crop_type_mapping")) {
     table_data <- get(table)
     for (col in colnames(table_data)) {
       if (typeof(table_data[, col]) == "character") {
-        if (!all(stri_enc_isascii(table_data[, col]), na.rm = TRUE)) {
+        if (!all(stringi::stri_enc_isascii(table_data[, col]), na.rm = TRUE)) {
           # String has non-ASCII characters
-          if (!all(stri_enc_isutf8(table_data[, col]), na.rm = TRUE)) {
+          if (!all(stringi::stri_enc_isutf8(table_data[, col]), na.rm = TRUE)) {
             # String has non-UTF8 characters -> assume windows-1252 encoding and
             # convert to UTF-8
             message(
@@ -892,7 +914,7 @@ for (table in c("country_group_data", "crop_type_mapping")) {
               " from windows-1252 to UTF-8 encoding in ",
               table
             )
-            table_data[, col] <- stri_encode(
+            table_data[, col] <- stringi::stri_encode(
               table_data[, col],
               "windows-1252",
               "UTF-8"
@@ -905,8 +927,12 @@ for (table in c("country_group_data", "crop_type_mapping")) {
             " from UTF-8 to ASCII encoding in ",
             table
           )
-          table_data[, col] <- stri_encode(table_data[, col], "UTF-8", "UTF-8")
-          table_data[, col] <- stri_trans_general(
+          table_data[, col] <- stringi::stri_encode(
+            table_data[, col],
+            "UTF-8",
+            "UTF-8"
+          )
+          table_data[, col] <- stringi::stri_trans_general(
             table_data[, col],
             "latin-ascii"
           )
@@ -925,57 +951,65 @@ for (table in c("country_group_data", "crop_type_mapping")) {
 # Check nutrient availability for both trends and patterns. Only process
 # nutrients for which patterns and trends are available.
 if (!identical(
-  sort(fertilizer_trend_nutrients),
-  sort(fertilizer_pattern_nutrients)
+  sort(LandInG_setup$fertilizer$fertilizer_trend_nutrients),
+  sort(LandInG_setup$fertilizer$fertilizer_pattern_nutrients)
 )) {
   warning(
     "Nutrients for fertilizer patterns (",
-    toString(fertilizer_pattern_nutrients),
+    toString(LandInG_setup$fertilizer$fertilizer_pattern_nutrients),
     ") do not match nutrients for fertilizer trends (",
-    toString(fertilizer_trend_nutrients),
+    toString(LandInG_setup$fertilizer$fertilizer_trend_nutrients),
     "). Processing: ",
     toString(
-      intersect(fertilizer_pattern_nutrients, fertilizer_trend_nutrients)
+      intersect(
+        LandInG_setup$fertilizer$fertilizer_pattern_nutrients,
+        LandInG_setup$fertilizer$fertilizer_trend_nutrients
+      )
     ),
     call. = FALSE,
     immediate. = TRUE
   )
 }
-if (length(fertilizer_pattern_refyear) != 1) {
+if (length(LandInG_setup$fertilizer$fertilizer_pattern_refyear) != 1) {
   # Multiple reference years currently not supported by this script version.
   stop(
-    paste(
-      "Error: this script currently only supports fertilizer_pattern_refyear",
-      "of length 1. You provided:",
-      toString(fertilizer_pattern_refyear)
-    )
+    "Error: this script currently only supports fertilizer_pattern_refyear ",
+    "of length 1. You provided: ",
+    toString(LandInG_setup$fertilizer$fertilizer_pattern_refyear)
   )
 }
 for (nut in intersect(
-  fertilizer_pattern_nutrients,
-  fertilizer_trend_nutrients
+  LandInG_setup$fertilizer$fertilizer_pattern_nutrients,
+  LandInG_setup$fertilizer$fertilizer_trend_nutrients
 )) {
   # Determine crops
   cat("Nutrient:", nut, "\n")
-  pattern_crops <- na.omit(crop_type_mapping[, fertilizer_pattern_map_col])
+  pattern_crops <- na.omit(
+    crop_type_mapping[, LandInG_setup$fertilizer$fertilizer_pattern_map_col]
+  )
   pattern_crops <- unique(pattern_crops[which(nchar(pattern_crops) > 0)])
-  trend_crops <- na.omit(crop_type_mapping[, fertilizer_trend_map_col])
+  trend_crops <- na.omit(
+    crop_type_mapping[, LandInG_setup$fertilizer$fertilizer_trend_map_col]
+  )
   trend_crops <- unique(trend_crops[which(nchar(trend_crops) > 0)])
   # Check that each pattern_crop has corresponding trend_crop
   p_rows <- match(
     pattern_crops,
-    crop_type_mapping[, fertilizer_pattern_map_col]
+    crop_type_mapping[, LandInG_setup$fertilizer$fertilizer_pattern_map_col]
   )
   crop_mismatch <- which(
-    is.na(crop_type_mapping[p_rows, fertilizer_trend_map_col]) |
-    !crop_type_mapping[p_rows, fertilizer_trend_map_col] %in% trend_crops
+    is.na(
+      crop_type_mapping[p_rows, LandInG_setup$fertilizer$fertilizer_trend_map_col]
+    ) |
+      !crop_type_mapping[p_rows, LandInG_setup$fertilizer$fertilizer_trend_map_col] %in%
+        trend_crops
   )
   if (length(crop_mismatch) > 0) {
     warning(
       "No corresponding crop trend available for crop(s)",
       toString(sQuote(pattern_crops[crop_mismatch])),
       ". Please check crop_type_mapping in ",
-      mapping_file,
+      LandInG_setup$fertilizer$mapping_file,
       call. = FALSE,
       immediate. = TRUE
     )
@@ -984,10 +1018,20 @@ for (nut in intersect(
     "Processing", length(pattern_crops), "crops",
     ifelse(num_cluster > 1, paste("on", num_cluster, "CPUs\n"), "\n")
   )
+  # Make %dopar% from foreach package available.
+  library(foreach)
+  noexport <- NULL
+  if (parallel_mpi) {
+    # Wrap terra rast objects for sending to parallel tasks
+    trend_admin_raster_wrapped <- terra::wrap(trend_admin_raster)
+    pattern_admin_raster_wrapped <- terra::wrap(pattern_admin_raster)
+    noexport <- c("trend_admin_raster", "pattern_admin_raster")
+  }
   crop_loop <- foreach(
     pcrop = pattern_crops,
     .inorder = FALSE,
-    .combine = c
+    .combine = c,
+    .noexport = noexport
   ) %dopar% {
     # Log gap-filling into temporary file
     logfile <- tempfile(
@@ -1009,19 +1053,25 @@ for (nut in intersect(
     )
     working_dir_pattern <- file.path("tmp", paste0("work_", tmp_string))
     rm(tmp_res, tmp_string)
-    if (!fertilizer_pattern_admin_resmatch || !dir.exists(working_dir_pattern)) {
+    if (!exists("pattern_admin_raster")) {
+      # Unwrap on parallel nodes
+      pattern_admin_raster <- terra::unwrap(pattern_admin_raster_wrapped)
+    }
+    if (!LandInG_setup$fertilizer$fertilizer_pattern_admin_resmatch ||
+        !dir.exists(working_dir_pattern)
+    ) {
       # If resolution of fertilizer patterns does not correspond to resolution
       # of admin unit dataset determine working directory from source
       # resolutions.
       # File names of source data files. Expected pattern used in Mueller et al.
       # dataset: [CROP][NUTRIENT]apprate.nc
       tmp_filenames <- file.path(
-        fertilizer_pattern_dir,
+        LandInG_setup$fertilizer$fertilizer_pattern_dir,
         paste0(pcrop, nut, "apprate.nc")
       )
       tmp_filenames <- tmp_filenames[which(file.exists(tmp_filenames))]
       if (length(tmp_filenames) > 0) {
-        tmp_raster <- raster(tmp_filenames[1], band = 1)
+        tmp_raster <- terra::rast(tmp_filenames[1], lyrs = 1)
         # Note: If different crops have different resolutions you need to save
         # a backup copy of pattern_admin_raster here and restore it after this
         # crop has finished processing.
@@ -1033,7 +1083,7 @@ for (nut in intersect(
         )
         rm(tmp_raster)
         # Update resolution and working_dir_pattern
-        pattern_admin_res <- res(pattern_admin_raster)
+        pattern_admin_res <- terra::res(pattern_admin_raster)
         tmp_res <- ifelse(pattern_admin_res < 1 / 60, 3600, 60) *
           pattern_admin_res
         tmp_string <- paste(
@@ -1049,7 +1099,7 @@ for (nut in intersect(
         message(
           "Error: Cannot determine working directory for gap-filled patterns",
           " automatically and no matching crop pattern source file found in ",
-          fertilizer_pattern_dir,
+          LandInG_setup$fertilizer$fertilizer_pattern_dir,
           ". Skipping ", sQuote(pcrop)
         )
         # Stop logging to temporary file.
@@ -1059,17 +1109,21 @@ for (nut in intersect(
         return(NULL)
       }
     }
+    if (!exists("trend_admin_raster")) {
+      # Unwrap on parallel nodes
+      trend_admin_raster <- terra::unwrap(trend_admin_raster_wrapped)
+    }
     cat("***", pcrop, "***\n")
     # Gap-filled pattern file
-    # Expected filename pattern: 
+    # Expected filename pattern:
     # [CROP][NUTRIENT]apprate_[ADMIN_DATASET]_[national|subnational].nc
     pattern_filename <- file.path(
       working_dir_pattern,
       paste0(
         pcrop, nut, "apprate_",
-        fertilizer_pattern_admin,
+        LandInG_setup$fertilizer$fertilizer_pattern_admin,
         ifelse(
-          fertilizer_pattern_is_national,
+          LandInG_setup$fertilizer$fertilizer_pattern_is_national,
           "_national",
           "_subnational"
         ),
@@ -1080,8 +1134,12 @@ for (nut in intersect(
     pattern_varname <- paste0(pcrop, nut, "apprate")
     if (file.exists(pattern_filename)) {
       # Corresponding crop for trend
-      p_row <- match(pcrop, crop_type_mapping[, fertilizer_pattern_map_col])
-      tcrop <- crop_type_mapping[p_row, fertilizer_trend_map_col]
+      p_row <- match(
+        pcrop,
+        crop_type_mapping[, LandInG_setup$fertilizer$fertilizer_pattern_map_col]
+      )
+      tcrop <-
+        crop_type_mapping[p_row, LandInG_setup$fertilizer$fertilizer_trend_map_col]
       # Working directory for fertilizer trend data
       tmp_res <- ifelse(trend_admin_res < 1 / 60, 3600, 60) *
         trend_admin_res
@@ -1093,25 +1151,28 @@ for (nut in intersect(
       )
       working_dir_trend <- file.path("tmp", paste0("work_", tmp_string))
       rm(tmp_res, tmp_string)
-      if (!fertilizer_trend_admin_resmatch || !dir.exists(working_dir_trend)) {
+      if (!LandInG_setup$fertilizer$fertilizer_trend_admin_resmatch ||
+            !dir.exists(working_dir_trend)) {
         # If resolution of fertilizer trends does not correspond to resolution
         # of admin unit dataset determine working directory from source
         # resolutions. File names of source data files.
-        if(!is.null(fertilizer_trend_src_name)) {
-          tmp_filename <- fertilizer_trend_src_name
+        if (!is.null(LandInG_setup$fertilizer$fertilizer_trend_src_name)) {
+          tmp_filename <- LandInG_setup$fertilizer$fertilizer_trend_src_name
           trend_varname <- paste0("fertl_", tcrop)
         } else {
           stop(
-            paste(
-              "You have not specified a filename for fertilizer trends",
-              "source data. Please supply fertilizer_trend_src_name in",
-              "fertilizer_setup.R or add logic to determine filename to this",
-              "script."
-            )
+            "You have not specified a filename for fertilizer trends ",
+            "source data. Please supply fertilizer_trend_src_name in ",
+            "fertilizer_setup.R or add logic to determine filename to this ",
+            "script."
           )
         }
         if (file.exists(tmp_filename)) {
-          tmp_raster <- raster(tmp_filename, varname = trend_varname, band = 1)
+          tmp_raster <- terra::rast(
+            tmp_filename,
+            subds = trend_varname,
+            lyrs = 1
+          )
           # Note: If different crops have different resolutions you need to save
           # a backup copy of trend_admin_raster here and restore it after this
           # crop has finished processing.
@@ -1123,7 +1184,7 @@ for (nut in intersect(
           )
           rm(tmp_raster)
           # Update resolution and working_dir_trend
-          trend_admin_res <- res(trend_admin_raster)
+          trend_admin_res <- terra::res(trend_admin_raster)
           tmp_res <- ifelse(trend_admin_res < 1 / 60, 3600, 60) *
             trend_admin_res
           tmp_string <- paste(
@@ -1153,9 +1214,9 @@ for (nut in intersect(
         working_dir_trend,
         paste0(
           tcrop, nut, "_relative_ts_",
-          fertilizer_trend_admin,
+          LandInG_setup$fertilizer$fertilizer_trend_admin,
           ifelse(
-            fertilizer_trend_is_national,
+            LandInG_setup$fertilizer$fertilizer_trend_is_national,
             "_national",
             "_subnational"
           ),
@@ -1165,26 +1226,36 @@ for (nut in intersect(
       if (file.exists(trend_filename)) {
         cat("Corresponding trend taken from", sQuote(tcrop), "\n")
         # Load pattern
-        pattern_nc <- nc_open(pattern_filename)
+        pattern_nc <- ncdf4::nc_open(pattern_filename)
         try(
           pattern_years <- nc_file_years(pattern_nc)
         )
         if (class(pattern_years) == "try-error") {
           # Error occurred determining file years.
-          nc_close(file_nc)
+          ncdf4::nc_close(file_nc)
           # Stop logging to temporary file.
           sink(type = "output")
           sink(type = "message")
           close(fp)
           return(NULL)
         }
-        pattern_unit <- ncatt_get(pattern_nc, pattern_varname, "units")
-        nc_close(pattern_nc)
-        if (!all(fertilizer_pattern_refyear %in% pattern_years)) {
+        pattern_unit <- ncdf4::ncatt_get(pattern_nc, pattern_varname, "units")
+        ncdf4::nc_close(pattern_nc)
+        if (
+          !all(
+            LandInG_setup$fertilizer$fertilizer_pattern_refyear %in%
+              pattern_years
+          )
+        ) {
           # Cannot use stop() in foreach loop
           message(
             "Error: reference year(s) ",
-            toString(setdiff(fertilizer_pattern_refyear, pattern_years)),
+            toString(
+              setdiff(
+                LandInG_setup$fertilizer$fertilizer_pattern_refyear,
+                pattern_years
+              )
+            ),
             " missing in pattern file ", pattern_filename
           )
           # Stop logging to temporary file.
@@ -1194,13 +1265,16 @@ for (nut in intersect(
           return(NULL)
         }
         # This part only works for single fertilizer_pattern_refyear
-        pattern_ref <- raster(
+        pattern_ref <- terra::rast(
           pattern_filename,
-          varname = pattern_varname,
-          band = which(pattern_years == fertilizer_pattern_refyear)
+          subds = pattern_varname,
+          lyrs = which(
+            pattern_years ==
+              LandInG_setup$fertilizer$fertilizer_pattern_refyear
+          )
         )
-        if (extent(pattern_ref) != extent(pattern_admin_raster) ||
-          any(res(pattern_ref) != res(pattern_admin_raster))
+        if (terra::ext(pattern_ref) != terra::ext(pattern_admin_raster) ||
+            any(terra::res(pattern_ref) != terra::res(pattern_admin_raster))
         ) {
           # Unexpected error. Cannot use stop() in foreach loop
           message(
@@ -1217,9 +1291,35 @@ for (nut in intersect(
         }
         # Load trend data
         load(trend_filename)
-        trend_years <- as.integer(dimnames(gapfilled_ts)[[1]])
+        if (
+          !exists("LandInG_version") ||
+            LandInG_version != LandInG_setup$LandInG_version
+        ) {
+          warning(
+            trend_filename,
+            " has been created with a different version of LandInG.",
+            " Consider running gapfill_fertilizer_trend.R again to avoid",
+            " inconsistencies.",
+            call. = FALSE, immediate. = TRUE
+          )
+          for (v in c("gapfilled_level", "gapfilled_sources", "gapfilled_ts")) {
+            tmpvar <- get(v)
+            if (is.null(names(dim(tmpvar)))) {
+              dn <- dimnames(tmpvar)
+              names(dn) <- c("time", "country")
+              names(dim(tmpvar)) <- names(dn)
+              dimnames(tmpvar) <- dn
+              assign(v, tmpvar)
+              rm(tmpvar)
+            }
+          }
+        }
+        if (exists("LandInG_version")) {
+          rm(LandInG_version)
+        }
+        trend_years <- as.integer(dimnames(gapfilled_ts)[["time"]])
         # Try to harmonize admin codes used in pattern and trend data
-        pattern_vals <- values(pattern_admin_raster)
+        pattern_vals <- ul(terra::values(pattern_admin_raster))
         # Unique admin unit codes in pattern_admin_raster
         pattern_ccodes <- na.omit(unique(pattern_vals))
         if (!is.null(pattern_admin_names)) {
@@ -1235,11 +1335,13 @@ for (nut in intersect(
         }
         if (is.null(trend_admin_names)) {
           # Replace country codes used for trend data with ISO codes
-          trend_ccodes <- dimnames(gapfilled_ts)[[2]]
+          trend_ccodes <- dimnames(gapfilled_ts)[["country"]]
           if (!all(
-            trend_ccodes %in% country_group_data[, trend_country_grouping_col] |
-            trend_ccodes %in% pattern_admin_replacement$replacement
-          )) {
+            trend_ccodes %in%
+              country_group_data[, trend_country_grouping_col] |
+              trend_ccodes %in% pattern_admin_replacement$replacement
+          )
+          ) {
             warning(
               "Gap-filled trend data contains countries not ",
               "available in country_group_data. These cannot be used:\n",
@@ -1263,16 +1365,17 @@ for (nut in intersect(
           }
           # Rename country codes to ISO codes.
           iso_r <- match(
-            dimnames(gapfilled_ts)[[2]],
+            dimnames(gapfilled_ts)[["country"]],
             country_group_data[, trend_country_grouping_col]
           )
-          dimnames(gapfilled_ts)[[2]] <-
+          dimnames(gapfilled_ts)[["country"]] <-
             country_group_data[iso_r, country_group_iso3_col]
           # Same for gapfilled_level
-          trend_ccodes <- dimnames(gapfilled_level)[[2]]
+          trend_ccodes <- dimnames(gapfilled_level)[["country"]]
           if (!all(
             trend_ccodes %in% country_group_data[, trend_country_grouping_col]
-          )) {
+          )
+          ) {
             warning(
               "Gap-filling metadata for trend data contains ",
               "countries not available in country_group_data. ",
@@ -1297,18 +1400,20 @@ for (nut in intersect(
           }
           # Rename country codes to ISO codes.
           iso_r <- match(
-            dimnames(gapfilled_level)[[2]],
+            dimnames(gapfilled_level)[["country"]],
             country_group_data[, trend_country_grouping_col]
           )
-          dimnames(gapfilled_level)[[2]] <-
+          dimnames(gapfilled_level)[["country"]] <-
             country_group_data[iso_r, country_group_iso3_col]
           # Select codes from gapfilled_ts, should normally be identical
-          gapfilled_level <- gapfilled_level[, dimnames(gapfilled_ts)[[2]]]
+          gapfilled_level <-
+            gapfilled_level[, dimnames(gapfilled_ts)[["country"]]]
           # Same for gapfilled_sources
-          trend_ccodes <- dimnames(gapfilled_sources)[[2]]
+          trend_ccodes <- dimnames(gapfilled_sources)[["country"]]
           if (!all(
             trend_ccodes %in% country_group_data[, trend_country_grouping_col]
-          )) {
+          )
+          ) {
             warning(
               "Gap-filling metadata for trend data contains ",
               "countries not available in country_group_data. ",
@@ -1334,16 +1439,16 @@ for (nut in intersect(
           }
           # Rename country codes to ISO codes.
           iso_r <- match(
-            dimnames(gapfilled_sources)[[2]],
+            dimnames(gapfilled_sources)[["country"]],
             country_group_data[, trend_country_grouping_col]
           )
-          dimnames(gapfilled_sources)[[2]] <-
+          dimnames(gapfilled_sources)[["country"]] <-
             country_group_data[iso_r, country_group_iso3_col]
           # Select codes from gapfilled_ts, should normally be identical
           gapfilled_sources <-
-            gapfilled_sources[, dimnames(gapfilled_ts)[[2]]]
+            gapfilled_sources[, dimnames(gapfilled_ts)[["country"]]]
         }
-        trend_isocodes <- dimnames(gapfilled_ts)[[2]]
+        trend_isocodes <- dimnames(gapfilled_ts)[["country"]]
         # Pattern ISO codes missing in trend data
         iso_mismatch <- setdiff(pattern_isocodes, trend_isocodes)
         # Check if these can be filled with pattern_admin_replacement rules
@@ -1379,7 +1484,8 @@ for (nut in intersect(
             # Dummy level value assigned in gapfill_fertilizer_trend.R when no
             # country has non-zero fertilizer rate.
             global_fill_code <- -1,
-            assign_country_threshold = fertilizer_trend_assign_country_threshold
+            assign_country_threshold =
+              LandInG_setup$fertilizer$fertilizer_trend_assign_country_threshold
           )
         } else if (
           anyNA(gapfilled_ts[, intersect(pattern_isocodes, trend_isocodes)])
@@ -1387,7 +1493,9 @@ for (nut in intersect(
           warning(
             length(
               which(
-                is.na(gapfilled_ts[, intersect(pattern_isocodes, trend_isocodes)])
+                is.na(
+                  gapfilled_ts[, intersect(pattern_isocodes, trend_isocodes)]
+                )
               )
             ),
             " missing value(s) in gapfilled_ts.",
@@ -1407,19 +1515,20 @@ for (nut in intersect(
             # Dummy level value assigned in gapfill_fertilizer_trend.R when no
             # country has non-zero fertilizer rate.
             global_fill_code <- -1,
-            assign_country_threshold = fertilizer_trend_assign_country_threshold
+            assign_country_threshold =
+              LandInG_setup$fertilizer$fertilizer_trend_assign_country_threshold
           )
         }
         if (exists("gapfilled_data") &&
-          !identical(gapfilled_data$data_ts, gapfilled_ts)
+            !identical(gapfilled_data$data_ts, gapfilled_ts)
         ) {
           # Save gap-filled data to file because, by default, several crop
           # fertilizer patterns use the same crop trend.
           # First back up original data
           bak_trend_filename <- paste0(
-            file_path_sans_ext(trend_filename), "_",
+            tools::file_path_sans_ext(trend_filename), "_",
             Sys.Date(),
-            ".", file_ext(trend_filename),
+            ".", tools::file_ext(trend_filename),
             ".bak"
           )
           if (num_cluster > 1) {
@@ -1429,6 +1538,7 @@ for (nut in intersect(
           }
           if (!file.exists(bak_trend_filename)) {
             tmp_envir <- new.env()
+            tmp_envir$LandInG_version <- LandInG_setup$LandInG_version
             if (is.null(trend_admin_names)) {
               # Need to restore original admin unit codes used in trend data
               iso_r <- match(
@@ -1450,6 +1560,7 @@ for (nut in intersect(
               tmp_envir$gapfilled_sources <- gapfilled_sources
             }
             save(
+              LandInG_version,
               gapfilled_ts,
               gapfilled_level,
               gapfilled_sources,
@@ -1466,9 +1577,10 @@ for (nut in intersect(
           gapfilled_ts <- gapfilled_data$data_ts
           gapfilled_level <- gapfilled_data$data_level
           gapfilled_sources <- gapfilled_data$data_sources
-          trend_isocodes <- dimnames(gapfilled_ts)[[2]]
+          trend_isocodes <- dimnames(gapfilled_ts)[["country"]]
           cat("Updating fertilizer trend time series in", trend_filename, "\n")
           tmp_envir <- new.env()
+          tmp_envir$LandInG_version <- LandInG_setup$LandInG_version
           if (is.null(trend_admin_names)) {
             # Need to restore original admin unit codes used in trend data
             iso_r <- match(
@@ -1480,15 +1592,16 @@ for (nut in intersect(
             tmp_envir$gapfilled_level <- gapfilled_level[, which(!is.na(ccode))]
             tmp_envir$gapfilled_sources <-
               gapfilled_sources[, which(!is.na(ccode))]
-            dimnames(tmp_envir$gapfilled_ts)[[2]] <- na.omit(ccode)
-            dimnames(tmp_envir$gapfilled_level)[[2]] <- na.omit(ccode)
-            dimnames(tmp_envir$gapfilled_sources)[[2]] <- na.omit(ccode)
+            dimnames(tmp_envir$gapfilled_ts)[["country"]] <- na.omit(ccode)
+            dimnames(tmp_envir$gapfilled_level)[["country"]] <- na.omit(ccode)
+            dimnames(tmp_envir$gapfilled_sources)[["country"]] <- na.omit(ccode)
           } else {
             tmp_envir$gapfilled_ts <- gapfilled_ts
             tmp_envir$gapfilled_level <- gapfilled_level
             tmp_envir$gapfilled_sources <- gapfilled_sources
           }
           save(
+            LandInG_version,
             gapfilled_ts,
             gapfilled_level,
             gapfilled_sources,
@@ -1500,18 +1613,27 @@ for (nut in intersect(
         rm(list = intersect("gapfilled_data", ls()))
         # Output years
         ts_output_years <- c(
-          max(min(trend_years), min(output_period)),
-          min(max(trend_years), max(output_period))
+          max(min(trend_years), min(LandInG_setup$fertilizer$output_period)),
+          min(max(trend_years), max(LandInG_setup$fertilizer$output_period))
         )
-        if (!all(seq(min(output_period), max(output_period)) %in% trend_years)) {
+        if (!all(
+          seq(
+            min(LandInG_setup$fertilizer$output_period),
+            max(LandInG_setup$fertilizer$output_period)
+          ) %in% trend_years
+        )
+        ) {
           missing_years <- setdiff(
-            seq(min(output_period), max(output_period)),
+            seq(
+              min(LandInG_setup$fertilizer$output_period),
+              max(LandInG_setup$fertilizer$output_period)
+            ),
             trend_years
           )
           warning(
             "Trend data from ", sQuote(trend_filename),
             " does not fully cover requested output_period ",
-            paste(output_period, collapse = "-"),
+            paste(LandInG_setup$fertilizer$output_period, collapse = "-"),
             ".\nRealized output period: ",
             paste(ts_output_years, collapse = "-"),
             ifelse(
@@ -1571,8 +1693,8 @@ for (nut in intersect(
           # Check for replacement rules
           if (isocode %in% pattern_admin_replacement$source) {
             iso_r <- match(isocode, pattern_admin_replacement$source)
-            if (pattern_admin_replacement$replacement[iso_r] %in%
-              trend_isocodes
+            if (
+              pattern_admin_replacement$replacement[iso_r] %in% trend_isocodes
             ) {
               # Assign cells to ISO code of replacement country
               isocode <- pattern_admin_replacement$replacement[iso_r]
@@ -1621,7 +1743,7 @@ for (nut in intersect(
         # 2. All non-missing cells in pattern_admin_raster are assigned to
         # exactly one admin unit.
         if (length(unlist(pattern_admin_celllist)) !=
-          length(unique(unlist(pattern_admin_celllist)))
+            length(unique(unlist(pattern_admin_celllist)))
         ) {
           freq <- data.frame(table(unlist(pattern_admin_celllist)))
           multiple_factor <- freq[which(freq$Freq > 1), "Var1"]
@@ -1665,12 +1787,16 @@ for (nut in intersect(
           working_dir_pattern,
           paste0(
             pcrop, nut, "_timeseries_pattern_",
-            fertilizer_pattern_admin,
-            ifelse(fertilizer_pattern_is_national, "_national", "_subnational"),
-            "_trend_",
-            fertilizer_trend_admin,
+            LandInG_setup$fertilizer$fertilizer_pattern_admin,
             ifelse(
-              fertilizer_trend_is_national,
+              LandInG_setup$fertilizer$fertilizer_pattern_is_national,
+              "_national",
+              "_subnational"
+            ),
+            "_trend_",
+            LandInG_setup$fertilizer$fertilizer_trend_admin,
+            ifelse(
+              LandInG_setup$fertilizer$fertilizer_trend_is_national,
               "_national_",
               "_subnational_"
             ),
@@ -1680,18 +1806,18 @@ for (nut in intersect(
         )
         cat("Setting up output file", sQuote(output_filename), "\n")
         if (!pattern_unit$hasatt) {
-          if (exists("fertilizer_pattern_unit") &&
-            !is.null(fertilizer_pattern_unit) &&
-            nchar(fertilizer_pattern_unit) > 0
+          if (!is.null(LandInG_setup$fertilizer$fertilizer_pattern_unit) &&
+              nchar(LandInG_setup$fertilizer$fertilizer_pattern_unit) > 0
           ) {
             warning(
               "Unit not set in ", sQuote(pattern_filename),
               ", assuming fertilizer_pattern_unit set in fertilizer_setup.R ",
-              sQuote(fertilizer_pattern_unit),
+              sQuote(LandInG_setup$fertilizer$fertilizer_pattern_unit),
               call. = FALSE,
               immediate. = TRUE
             )
-            pattern_unit$value <- fertilizer_pattern_unit
+            pattern_unit$value <-
+              LandInG_setup$fertilizer$fertilizer_pattern_unit
           } else {
             warning(
               "Unit not set in ", sQuote(pattern_filename),
@@ -1701,37 +1827,39 @@ for (nut in intersect(
             )
             pattern_unit$value <- ""
           }
-        } else if (pattern_unit$value != fertilizer_pattern_unit) {
+        } else if (pattern_unit$value !=
+            LandInG_setup$fertilizer$fertilizer_pattern_unit
+        ) {
           warning(
             "Unit set in ", pattern_filename, " ",
             sQuote(pattern_unit$value),
             " does not match fertilizer_pattern_unit ",
-            sQuote(fertilizer_pattern_unit),
+            sQuote(LandInG_setup$fertilizer$fertilizer_pattern_unit),
             " defined in fertilizer_setup.R.\n",
             "Please make sure to set correct unit.",
             call. = FALSE,
             immediate. = TRUE
           )
         }
-        lon_dim <- ncdim_def(
+        lon_dim <- ncdf4::ncdim_def(
           name = "longitude",
           units = "degrees_east",
-          vals = xFromCol(pattern_admin_raster),
+          vals = terra::xFromCol(pattern_admin_raster),
           longname = "longitude"
         )
-        lat_dim <- ncdim_def(
+        lat_dim <- ncdf4::ncdim_def(
           name = "latitude",
           units = "degrees_north",
-          vals = yFromRow(pattern_admin_raster),
+          vals = terra::yFromRow(pattern_admin_raster),
           longname = "latitude"
         )
-        time_dim <- ncdim_def(
+        time_dim <- ncdf4::ncdim_def(
           name = "time",
           units = "year",
           vals = seq(min(ts_output_years), max(ts_output_years)),
           unlim = TRUE
         )
-        fert_var <- ncvar_def(
+        fert_var <- ncdf4::ncvar_def(
           name = paste0(pcrop, nut, "_timeseries"),
           units = pattern_unit$value,
           dim = list(lon_dim, lat_dim, time_dim),
@@ -1744,18 +1872,25 @@ for (nut in intersect(
           compression = 5
         )
         # Create output file
-        output_nc <- nc_create(output_filename, fert_var)
-        ncatt_put(
+        output_nc <- ncdf4::nc_create(output_filename, fert_var)
+        ncdf4::ncatt_put(
           output_nc,
           paste0(pcrop, nut, "_timeseries"),
           "missing_value",
           missval_float,
           prec = "float"
         )
-        nc_sync(output_nc)
+        # Save LandInG version number in file.
+        ncdf4::ncatt_put(
+          nc = output_nc,
+          varid = 0,
+          attname = "LandInG_version",
+          attval = LandInG_setup$LandInG_version
+        )
+        ncdf4::nc_sync(output_nc)
         # Load spatial pattern into memory to speed up processing.
-        if (!inMemory(pattern_ref)) {
-          pattern_ref <- readAll(pattern_ref)
+        if (!terra::inMemory(pattern_ref)) {
+          pattern_ref <- terra::toMemory(pattern_ref)
         }
         for (year in seq(min(ts_output_years), max(ts_output_years))) {
           cat("+", year, "+\n")
@@ -1763,12 +1898,12 @@ for (nut in intersect(
           yeardata[] <- NA
           for (country in names(pattern_admin_celllist)) {
             yeardata[pattern_admin_celllist[[country]]] <-
-              pattern_ref[pattern_admin_celllist[[country]]] *
+              ul(pattern_ref[pattern_admin_celllist[[country]]]) *
               gapfilled_ts[as.character(year), country]
           }
           writedata <- as.double(yeardata)
           writedata[which(is.na(writedata))] <- missval_float
-          ncvar_put(
+          ncdf4::ncvar_put(
             output_nc,
             paste0(pcrop, nut, "_timeseries"),
             writedata,
@@ -1778,7 +1913,7 @@ for (nut in intersect(
           rm(writedata, yeardata)
         }
         # Close output NetCDF
-        nc_close(output_nc)
+        ncdf4::nc_close(output_nc)
       } else {
         warning(
           "*** File containing corresponding trend ",
@@ -1814,10 +1949,18 @@ for (nut in intersect(
       working_dir_pattern,
       paste0(
         pcrop, nut, "_timeseries_pattern_",
-        fertilizer_pattern_admin,
-        ifelse(fertilizer_pattern_is_national, "_national", "_subnational"),
-        "_trend_", fertilizer_trend_admin,
-        ifelse(fertilizer_trend_is_national, "_national_",  "_subnational_"),
+        LandInG_setup$fertilizer$fertilizer_pattern_admin,
+        ifelse(
+          LandInG_setup$fertilizer$fertilizer_pattern_is_national,
+          "_national",
+          "_subnational"
+        ),
+        "_trend_", LandInG_setup$fertilizer$fertilizer_trend_admin,
+        ifelse(
+          LandInG_setup$fertilizer$fertilizer_trend_is_national,
+          "_national_",
+          "_subnational_"
+        ),
         paste(ts_output_years, collapse = "-"),
         ".log"
       )
@@ -1827,7 +1970,7 @@ for (nut in intersect(
   }
   if (length(crop_loop) != length(pattern_crops)) {
     warning(
-      "Time series or the following crops could not be created for ",
+      "Time series for the following crops could not be created for ",
       "nutrient ", sQuote(nut), ": ",
       toString(sQuote(setdiff(pattern_crops, crop_loop))),
       call. = FALSE,

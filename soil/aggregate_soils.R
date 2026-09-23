@@ -23,6 +23,7 @@
 ################################################################################
 # Clean up memory before starting
 rm(list = ls(all = TRUE))
+
 ################################################################################
 ## Basic set up:                                                              ##
 ##                                                                            ##
@@ -96,7 +97,7 @@ quicksearch <- TRUE
 ##                                                                            ##
 ## Format: either "BIN" (LPJmL input format with file header), "RAW" (LPJmL   ##
 ## input format without file header), or "CSV" (CSV table, cannot be used     ##
-## LPJmL). Optionally: Provide any format supported by the raster package to  ##
+## LPJmL). Optionally: Provide any format supported by the terra package to   ##
 ## create a raster map, e.g. "ASC" for ascii grid or "NC" for NetCDF.         ##
 lpjml_soil_format <- "BIN"
 ##                                                                            ##
@@ -111,7 +112,7 @@ lpjml_soil_headername <- "LPJSOIL"
 ## Soil pH file that is created:                                              ##
 ##                                                                            ##
 ## Format: either "BIN" or "CSV" (CSV cannot be used with LPJmL).             ##
-## Optionally: Provide any format supported by the raster package to create a ##
+## Optionally: Provide any format supported by the terra package to create a  ##
 ## raster map, e.g. "ASC" for ascii grid or "NC" for NetCDF.                  ##
 ## Comment out "lpjml_soilph_format" to skip creating a soil pH file, i.e. if ##
 ## using LPJmL version 4 or below.                                            ##
@@ -169,8 +170,18 @@ usda_to_lpjml <- data.frame(
 
 ################################################################################
 ## R packages required for this script. These may need to be installed first. ##
-library(raster)
-library(geosphere)
+required_packages <- c("terra", "geosphere", "foreach")
+if (!all(required_packages %in% .packages(all.available = TRUE))) {
+  stop(
+    "Please install missing package(s): ",
+    toString(
+      sQuote(
+        setdiff(required_packages, .packages(all.available = TRUE)),
+        q = FALSE
+      )
+    )
+  )
+}
 ################################################################################
 
 
@@ -186,10 +197,10 @@ library(geosphere)
 parallel_mpi <- parallel_local <- FALSE # Not to be set by user
 if (cluster) {
   # Try parallelization
-  if (require(Rmpi)) {
+  if ("Rmpi" %in% .packages(all.available = TRUE)) {
     # Rmpi = R implementation of MPI interface
     # This is intended for parallelization on high-performance cluster.
-    if (require(doMPI)) {
+    if ("doMPI" %in% .packages(all.available = TRUE)) {
       # doMPI = interface for foreach construct to run in MPI parallel mode
        # Start MPI cluster (link R instances together)
       cl <- doMPI::startMPIcluster()
@@ -204,7 +215,7 @@ if (cluster) {
       } else {
         # Only one task
         # Tell foreach to use sequential mode
-        registerDoSEQ()
+        foreach::registerDoSEQ()
         cat("Running in sequential mode because only one node is available.\n")
         num_cluster <- 1
       }
@@ -216,11 +227,11 @@ if (cluster) {
         call. = FALSE,
         immediate. = TRUE
       )
-      registerDoSEQ() # Tell foreach to use sequential mode
+      foreach::registerDoSEQ() # Tell foreach to use sequential mode
       cat("Falling back to running in sequential mode.\n")
       num_cluster <- 1
     }
-  } else if (require(doParallel)) {
+  } else if ("doParallel" %in% .packages(all.available = TRUE)) {
     # Try parallelization through parallel package.
     # This is probably more suitable to run in parallel on a local machine
     # Get number of CPU cores
@@ -243,12 +254,12 @@ if (cluster) {
       # Start cluster on local machine
       cl <- parallel::makeCluster(num_cluster)
       # Tell foreach to use this cluster
-      registerDoParallel(num_cluster)
+      doParallel::registerDoParallel(cl)
       parallel_local <- TRUE
       cat("Running in parallel mode on", num_cluster, "CPUs\n")
     } else {
       # Only one task
-      registerDoSEQ() # Tell foreach to use sequential mode
+      foreach::registerDoSEQ() # Tell foreach to use sequential mode
       cat("Running in sequential mode because only one CPU is available.\n")
     }
   } else {
@@ -260,14 +271,13 @@ if (cluster) {
       call. = FALSE,
       immediate. = TRUE
     )
-    registerDoSEQ() # Tells foreach to use sequential mode
+    foreach::registerDoSEQ() # Tells foreach to use sequential mode
     cat("Falling back to running in sequential mode.\n")
     num_cluster <- 1
   }
 } else {
   # Do not try parallelization
-  library(foreach)
-  registerDoSEQ() # Tells foreach to use sequential mode
+  foreach::registerDoSEQ() # Tells foreach to use sequential mode
   cat("Running in sequential mode.\n")
   num_cluster <- 1
 }
@@ -275,42 +285,25 @@ if (cluster) {
 
 
 ################################################################################
-## Helper functions for LPJmL input format                                    ##
-## The script lpjml_format_helper_functions.R is saved in the parent          ##
-## directory by default.                                                      ##
+## Helper functions for LPJmL input format and basic LandInG setup.           ##
+## The script landing_setup.R is saved in the parent directory by default.    ##
 ################################################################################
-if (file.exists("../lpjml_format_helper_functions.R")) {
-  source("../lpjml_format_helper_functions.R")
-} else {
-  stop("Please update path to script with LPJmL input format helper function")
+if (file.exists("../landing_setup.R")) {
+  source("../landing_setup.R", chdir = TRUE)
+} else if (!exists("LandInG_setup") || !is.environment(LandInG_setup)) {
+  stop("Please update path to script with LandInG setup script")
 }
-
 ## Set working dir to soil_dir, if soil_dir is set
 if (nchar(soil_dir) > 0) {
   setwd(soil_dir)
 }
+################################################################################
 
 ################################################################################
 ## Read grid file                                                             ##
-## Functions read_header(), get_headersize(), and get_datatype() defined in   ##
-## ../lpjml_format_helper_functions.R                                         ##
-cat("Reading LPJmL grid from", sQuote(gridname), "\n")
-gridheader <- read_header(gridname)
-gridfile <- file(gridname, "rb")
-seek(gridfile, get_headersize(gridheader))
-griddata <- matrix(
-  readBin(
-    gridfile,
-    what = get_datatype(gridheader)$type,
-    size = get_datatype(gridheader)$size,
-    n = gridheader$header["ncell"] * gridheader$header["nbands"],
-    endian = gridheader$endian
-  ) * gridheader$header["scalar"],
-  ncol = gridheader$header["nbands"],
-  byrow = TRUE,
-  dimnames = list(NULL, c("lon", "lat"))
-)
-close(gridfile)
+cat("Reading LPJmL grid from", sQuote(gridname, q = FALSE), "\n")
+gridheader <- lpjmlkit::read_header(gridname, verbose = FALSE)
+griddata <- lpjmlkit::read_grid(gridname)$data
 # Determine resolution string to use in filenames.
 tmp_res <- unique(
   ifelse(
@@ -333,21 +326,21 @@ lpj_res_string <- paste(
 )
 rm(tmp_res)
 # Create raster fitting griddata.
-gridextent <- extent(
+gridextent <- terra::ext(
   min(griddata[, "lon"]) - gridheader$header["cellsize_lon"] / 2,
   max(griddata[, "lon"]) + gridheader$header["cellsize_lon"] / 2,
   min(griddata[, "lat"]) - gridheader$header["cellsize_lat"] / 2,
   max(griddata[, "lat"]) + gridheader$header["cellsize_lat"] / 2
 )
-gridraster <- raster(
+gridraster <- terra::rast(
   gridextent,
-  res = gridheader$header[c("cellsize_lon", "cellsize_lat")]
+  resolution = gridheader$header[c("cellsize_lon", "cellsize_lat")]
 )
 # Set projection.
-proj4string(gridraster) <-
+terra::crs(gridraster) <-
   "+proj=longlat +datum=WGS84 +ellps=WGS84 +towgs84=0,0,0"
 # Assign grid indices.
-gridraster[cellFromXY(gridraster, griddata)] <-
+gridraster[terra::cellFromXY(gridraster, griddata)] <-
   seq_len(gridheader$header["ncell"])
 ################################################################################
 
@@ -363,7 +356,7 @@ lpjml_soiltexture_name <- paste0(
 )
 if (file.exists(lpjml_soiltexture_name)) {
   if (lpjml_soil_format == "BIN") {
-    soiltexture_header <- read_header(lpjml_soiltexture_name)
+    soiltexture_header <- lpjmlkit::read_header(lpjml_soiltexture_name)
     if (soiltexture_header$header["ncell"] != gridheader$header["ncell"] ||
       any(
         soiltexture_header$header[c("cellsize_lon", "cellsize_lat")] /
@@ -374,12 +367,12 @@ if (file.exists(lpjml_soiltexture_name)) {
       )
     ) {
       stop(
-        "Existing file ", sQuote(lpjml_soiltexture_name),
-        " does not match with grid file ", sQuote(gridname)
+        "Existing file ", sQuote(lpjml_soiltexture_name, q = FALSE),
+        " does not match with grid file ", sQuote(gridname, q = FALSE)
       )
     } else {
       stop(
-        "Soil texture file ", sQuote(lpjml_soiltexture_name),
+        "Soil texture file ", sQuote(lpjml_soiltexture_name, q = FALSE),
         " exists already.",
         "\nRename or delete existing file before running this script."
       )
@@ -387,19 +380,19 @@ if (file.exists(lpjml_soiltexture_name)) {
   } else if (lpjml_soil_format == "RAW") {
     if (file.size(lpjml_soiltexture_name) != gridheader$header["ncell"]) {
       stop(
-        "Existing file ", sQuote(lpjml_soiltexture_name),
-        " does not match with grid file ", sQuote(gridname)
+        "Existing file ", sQuote(lpjml_soiltexture_name, q = FALSE),
+        " does not match with grid file ", sQuote(gridname, q = FALSE)
       )
     } else {
       stop(
-        "Soil texture file ", sQuote(lpjml_soiltexture_name),
+        "Soil texture file ", sQuote(lpjml_soiltexture_name, q = FALSE),
         " exists already.",
         "\nRename or delete existing file before running this script."
       )
     }
   } else {
     stop(
-      "Soil texture file ", sQuote(lpjml_soiltexture_name),
+      "Soil texture file ", sQuote(lpjml_soiltexture_name, q = FALSE),
       " exists already.",
       "\nRename or delete existing file before running this script."
     )
@@ -416,7 +409,7 @@ if (exists("lpjml_soilph_format")) {
   )
   if (file.exists(lpjml_soilph_name)) {
     if (lpjml_soilph_format == "BIN") {
-      soilph_header <- read_header(lpjml_soilph_name)
+      soilph_header <- lpjmlkit::read_header(lpjml_soilph_name)
       if (soilph_header$header["ncell"] != gridheader$header["ncell"] ||
         any(
           soilph_header$header[c("cellsize_lon", "cellsize_lat")] /
@@ -427,19 +420,19 @@ if (exists("lpjml_soilph_format")) {
         )
       ) {
         stop(
-          "Existing file ", sQuote(lpjml_soilph_name),
-          " does not match with grid file ", sQuote(gridname)
+          "Existing file ", sQuote(lpjml_soilph_name, q = FALSE),
+          " does not match with grid file ", sQuote(gridname, q = FALSE)
         )
       } else {
         stop(
-          "Soil pH file ", sQuote(lpjml_soilph_name),
+          "Soil pH file ", sQuote(lpjml_soilph_name, q = FALSE),
           " exists already.",
           "\nRename or delete existing file before running this script."
         )
       }
     } else {
       stop(
-        "Soil pH file ", sQuote(lpjml_soilph_name),
+        "Soil pH file ", sQuote(lpjml_soilph_name, q = FALSE),
         " exists already.",
         "\nRename or delete existing file before running this script."
       )
@@ -468,13 +461,18 @@ savevar <- c(
   "lpjml_soilph_gapfilling",
   "lpjml_soilph_source",
   "lpjml_soil_ds",
-  "allow_skip"
+  "allow_skip",
+  "LandInG_version"
 )
 ################################################################################
 
 ################################################################################
 ## Read HWSD soil attribute database                                          ##
-cat("Reading HWSD soil attribute table from", sQuote(hwsd_attribute_file), "\n")
+cat(
+  "Reading HWSD soil attribute table from",
+  sQuote(hwsd_attribute_file, q = FALSE),
+  "\n"
+)
 hwsd_attribute_table <- read.csv(hwsd_attribute_file, stringsAsFactors = FALSE)
 # Read USDA texture class definitions.
 hwsd_usda_classes <- read.csv(hwsd_usda_class_file, stringsAsFactors = FALSE)
@@ -483,7 +481,9 @@ if (any(!hwsd_usda_classes$VALUE %in% usda_to_lpjml$USDA)) {
   # HWSD has class that cannot be assigned. Stop.
   stop(
     "Soil texture class(es) ",
-    toString(sQuote(setdiff(hwsd_usda_classes$VALUE, usda_to_lpjml$USDA))),
+    toString(
+      sQuote(setdiff(hwsd_usda_classes$VALUE, usda_to_lpjml$USDA), q = FALSE)
+    ),
     " from HWSD soil attribute database not defined in usda_to_lpjml.",
     "\nPlease check soil type mapping."
   )
@@ -493,7 +493,9 @@ if (any(!usda_to_lpjml$USDA %in% hwsd_usda_classes$VALUE)) {
   # assigned.
   warning(
     "Soil texture class(es) ",
-    toString(sQuote(setdiff(usda_to_lpjml$USDA, hwsd_usda_classes$VALUE))),
+    toString(
+      sQuote(setdiff(usda_to_lpjml$USDA, hwsd_usda_classes$VALUE), q = FALSE)
+    ),
     " defined in usda_to_lpjml not found in HWSD soil attribute database.",
     "\nPlease check soil type mapping.",
     call. = FALSE,
@@ -504,14 +506,14 @@ if (any(!usda_to_lpjml$USDA %in% hwsd_usda_classes$VALUE)) {
 if (any(!usda_to_lpjml$LPJmL %in% lpjml_soiltypes)) {
   stop(
     "Soil type(s) ",
-    toString(sQuote(setdiff(usda_to_lpjml$LPJmL, lpjml_soiltypes))),
+    toString(sQuote(setdiff(usda_to_lpjml$LPJmL, lpjml_soiltypes), q = FALSE)),
     " defined in usda_to_lpjml not part of lpjml_soiltypes"
   )
 }
 if (any(!lpjml_soiltypes %in% usda_to_lpjml$LPJmL)) {
   message(
     "Info: LPJmL soil type(s) ",
-    toString(sQuote(setdiff(lpjml_soiltypes, usda_to_lpjml$LPJmL))),
+    toString(sQuote(setdiff(lpjml_soiltypes, usda_to_lpjml$LPJmL), q = FALSE)),
     " not part of usda_to_lpjml mapping."
   )
 }
@@ -527,8 +529,8 @@ if (any(
         hwsd_usda_classes$CODE
       )
     ),
-    " found in ", sQuote(hwsd_attribute_file),
-    " missing in ", sQuote(hwsd_usda_class_file)
+    " found in ", sQuote(hwsd_attribute_file, q = FALSE),
+    " missing in ", sQuote(hwsd_usda_class_file, q = FALSE)
   )
 }
 # Some attribute table preparations.
@@ -548,28 +550,33 @@ hwsd_attribute_table[, "SHARE"] <- hwsd_attribute_table[, "SHARE"] / 100
 
 ################################################################################
 ## Open HWSD raster map                                                       ##
-cat("Reading HWSD soil map raster from", sQuote(hwsd_raster), "\n")
-hwsd <- raster(hwsd_raster)
+cat("Reading HWSD soil map raster from", sQuote(hwsd_raster, q = FALSE), "\n")
+hwsd <- terra::rast(hwsd_raster)
 # Set projection.
-proj4string(hwsd) <- "+proj=longlat +datum=WGS84 +ellps=WGS84 +towgs84=0,0,0"
+terra::crs(hwsd) <- "+proj=longlat +datum=WGS84 +ellps=WGS84 +towgs84=0,0,0"
 ################################################################################
 
 ################################################################################
 ## Compare resolution for compatibility                                       ##
-if (any(res(gridraster) / res(hwsd) < 0.9999)) {
+if (any(terra::res(gridraster) / terra::res(hwsd) < 0.9999)) {
   # Source is too coarse
   stop(
-    "Source resolution ", paste(res(hwsd), collapse = " by "),
-    " in ", sQuote(hwsd_raster),
+    "Source resolution ", paste(terra::res(hwsd), collapse = " by "),
+    " in ", sQuote(hwsd_raster, q = FALSE),
     " is coarser than target resolution ",
     paste(
       gridheader$header[c("cellsize_lon", "cellsize_lat")],
       collapse = " by "
     ),
-    " of grid file ", sQuote(gridname)
+    " of grid file ", sQuote(gridname, q = FALSE)
   )
 }
-if (any((res(gridraster) / res(hwsd)) %% 1 > 1e-4)) {
+if (
+  any(
+    (terra::res(gridraster) / terra::res(hwsd)) %% 1 > 1e-4 &
+      (terra::res(gridraster) / terra::res(hwsd)) %% 1 < 1 - 1e-4
+  )
+) {
   # Target is not integer multiple of source resolution
   stop(
     "Target resolution ",
@@ -577,49 +584,54 @@ if (any((res(gridraster) / res(hwsd)) %% 1 > 1e-4)) {
       gridheader$header[c("cellsize_lon", "cellsize_lat")],
       collapse = " by "
     ),
-    " of grid file ", sQuote(gridname),
+    " of grid file ", sQuote(gridname, q = FALSE),
     " is not an integer multiple of source resolution ",
-    paste(res(hwsd), collapse = " by "),
-    " in ", sQuote(hwsd_raster)
+    paste(terra::res(hwsd), collapse = " by "),
+    " in ", sQuote(hwsd_raster, q = FALSE)
   )
 }
 # Check spatial extent.
 # Allow for small tolerance.
-if (xmin(gridraster) - xmin(hwsd) < (-xres(hwsd) / 100) ||
-  xmax(gridraster) - xmax(hwsd) > xres(hwsd) / 100 ||
-  ymin(gridraster) - ymin(hwsd) < (-yres(hwsd) / 100) ||
-  ymax(gridraster) - ymax(hwsd) > yres(hwsd) / 100
+if (
+  terra::xmin(gridraster) - terra::xmin(hwsd) < (-terra::xres(hwsd) / 100) ||
+    terra::xmax(gridraster) - terra::xmax(hwsd) > terra::xres(hwsd) / 100 ||
+    terra::ymin(gridraster) - terra::ymin(hwsd) < (-terra::yres(hwsd) / 100) ||
+    terra::ymax(gridraster) - terra::ymax(hwsd) > terra::yres(hwsd) / 100
 ) {
   stop(
     "Spatial extent of source data ",
-    toString(extent(hwsd)),
+    toString(terra::ext(hwsd)),
     " does not cover the full spatial extent ",
-    toString(extent(gridraster)),
-    " of grid file ", sQuote(gridname), "."
+    toString(terra::ext(gridraster)),
+    " of grid file ", sQuote(gridname, q = FALSE), "."
   )
 }
 # Check cell boundary alignment.
 if (
   (
-    (abs(xmin(gridraster) - xmin(hwsd)) / xres(hwsd)) %% 1 > 1e-3 &&
-    (abs(xmin(gridraster) - xmin(hwsd)) / xres(hwsd)) %% 1 < 0.999
+    (abs(terra::xmin(gridraster) - terra::xmin(hwsd)) / terra::xres(hwsd)) %%
+      1 > 1e-3 &&
+      (abs(terra::xmin(gridraster) - terra::xmin(hwsd)) / terra::xres(hwsd)) %%
+        1 < 0.999
   ) || (
-    (abs(ymin(gridraster) - ymin(hwsd)) / yres(hwsd)) %% 1 > 1e-3 &&
-    (abs(ymin(gridraster) - ymin(hwsd)) / yres(hwsd)) %% 1 < 0.999
+    (abs(terra::ymin(gridraster) - terra::ymin(hwsd)) / terra::yres(hwsd)) %%
+      1 > 1e-3 &&
+      (abs(terra::ymin(gridraster) - terra::ymin(hwsd)) / terra::yres(hwsd)) %%
+        1 < 0.999
   )
 ) {
   stop(
-    "Spatial extent of source data ", toString(extent(hwsd)),
-    " and spatial extent of grid file ", sQuote(gridname),
-    toString(extent(gridraster)),
+    "Spatial extent of source data ", toString(terra::ext(hwsd)),
+    " and spatial extent of grid file ", sQuote(gridname, q = FALSE),
+    toString(terra::ext(gridraster)),
     " are mis-aligned."
   )
 } else {
   # Align extent to take care of numerical inaccuracies.
-  extent(gridraster) <- alignExtent(extent(gridraster), hwsd)
+  terra::ext(gridraster) <- terra::align(terra::ext(gridraster), hwsd)
 }
-aggregation_factor <- round(res(gridraster) / res(hwsd))
-if (xres(gridraster) != yres(gridraster)) {
+aggregation_factor <- round(terra::res(gridraster) / terra::res(hwsd))
+if (terra::xres(gridraster) != terra::yres(gridraster)) {
   if (lpjml_soil_format == "BIN" && lpjml_soil_version < 3) {
     stop(
       "Only header version 3 supports longitude and latitude resolutions ",
@@ -644,41 +656,36 @@ if (xres(gridraster) != yres(gridraster)) {
 ## working from file. The full HWSD raster map alone requires roughly 3.5 GB  ##
 ## (more during read operation). Skip this part if your computer does not     ##
 ## have enough RAM.                                                           ##
-## We are also setting a higher limit to how much data the raster package can ##
+## We are also setting an upper limit of how much data the terra package can  ##
 ## keep in memory before writing to temporary files. Adjust this to your      ##
 ## local machine. Temporary files are slower than rasters in memory.          ##
-# Set memory limit for raster package
-rasterOptions(maxmemory = 16e9, memfrac = 0.8)
-# Load data
-if (!inMemory(hwsd)) {
-  hwsd <- readAll(hwsd)
+# Set memory limit for terra package.
+terra::terraOptions(memmax = 10, memfrac = 0.8)
+# Load data into memory.
+if (!terra::inMemory(hwsd)) {
+  hwsd <- terra::toMemory(hwsd)
   gc(reset = TRUE)
 }
 ################################################################################
 
 ################################################################################
 ## Find unique mapping units in HWSD raster map and detect missing values.    ##
-# This is split into chunks to reduce memory requirements.
-map_mu <- integer(0)
-for (i in seq(1, ncell(hwsd), by = ncell(hwsd) %/% 20)) {
-  chunk <- seq(i, min(i + ncell(hwsd) %/% 20 - 1, ncell(hwsd)))
-  chunk_data <- hwsd[chunk]
-  chunk_unique <- unique(chunk_data, na.last = TRUE)
-  map_mu <- union(map_mu, chunk_unique)
-  rm(chunk, chunk_data, chunk_unique)
-  gc(full = FALSE)
-}
+map_mu <- unlist(
+  terra::unique(hwsd, incomparables = FALSE),
+  recursive = FALSE,
+  use.names = FALSE
+)
 att_mu <- unique(hwsd_attribute_table$MU_GLOBAL)
 if (!anyNA(map_mu) && length(setdiff(map_mu, att_mu)) == 1) {
   message(
-    "Assuming that value ", sQuote(setdiff(map_mu, att_mu)),
+    "Assuming that value ", sQuote(setdiff(map_mu, att_mu), q = FALSE),
     " in HWSD soil map raster represents missing value"
   )
 } else if (length(setdiff(map_mu, att_mu)) != 1) {
   stop(
     "The following mapping unit(s) from HWSD soil map raster is/are missing ",
     "in HWSD soil attribute table: ",
-    toString(sQuote(setdiff(map_mu, att_mu)))
+    toString(sQuote(setdiff(map_mu, att_mu), q = FALSE))
   )
 }
 ################################################################################
@@ -701,19 +708,21 @@ if (!anyNA(map_mu) && length(setdiff(map_mu, att_mu)) == 1) {
 ##    mapping unit                                                            ##
 ##                                                                            ##
 cat(
-  "Aggregating soil data from", sQuote(hwsd_raster),
+  "Aggregating soil data from", sQuote(hwsd_raster, q = FALSE),
   "with a spatial resolution of",
-  paste(format(res(hwsd), digits = 4), collapse = " by "),
-  "to", gridheader$header["ncell"], "cells from grid file", sQuote(gridname),
+  paste(format(terra::res(hwsd), digits = 4), collapse = " by "),
+  "to", gridheader$header["ncell"], "cells from grid file",
+  sQuote(gridname, q = FALSE),
   "with a spatial resolution of",
-  paste(format(res(gridraster), digits = 4), collapse = " by "), ".\n"
+  paste(format(terra::res(gridraster), digits = 4), collapse = " by "), ".\n"
 )
 if (!rock_ice_shared) {
   cat(
     "Soiltype(s)",
     toString(
       sQuote(
-        grep("rock|ice", lpjml_soiltypes, ignore.case = TRUE, value = TRUE)
+        grep("rock|ice", lpjml_soiltypes, ignore.case = TRUE, value = TRUE),
+        q = FALSE
       )
     ),
     "only assigned to cells if no other soil types are present.\n"
@@ -733,7 +742,7 @@ lpjml_no_rock_ice <- grep(
   invert = TRUE
 )
 # Index of LPJmL grid cells in gridraster.
-gridraster_index <- cellFromXY(gridraster, griddata)
+gridraster_index <- terra::cellFromXY(gridraster, griddata)
 # Initialize result vectors.
 lpjml_soiltexture <- lpjml_soilph <- lpjml_soilph_source <-
   rep(NA, gridheader$header["ncell"])
@@ -754,10 +763,21 @@ lpjml_soiltexture_gapfilling <- lpjml_soilph_gapfilling <- data.frame(
 # current settings.
 if (file.exists(tmp_RData)) {
   cat(
-    "Loading data from previous script run from", sQuote(tmp_RData),
+    "Loading data from previous script run from", sQuote(tmp_RData, q = FALSE),
     "and checking validity.\n"
   )
-  load(tmp_RData)
+  tmp_env <- new.env()
+  load(tmp_RData, envir = tmp_env)
+  if (
+    is.null(tmp_env$LandInG_version) ||
+      tmp_env$LandInG_version != LandInG_setup$LandInG_version
+  ) {
+    stop(
+      sQuote(tmp_RData, q = FALSE),
+      " was created with a different version of LandInG.",
+      "\nPlease delete file and rerun this script."
+    )
+  }
   for (testvar in c(
     "griddata",
     "hwsd_raster",
@@ -768,11 +788,11 @@ if (file.exists(tmp_RData)) {
     "quicksearch",
     "allow_skip"
   )) {
-    if (!identical(get(paste0("tmp_", testvar)), get(testvar))) {
+    if (!identical(tmp_env[[testvar]], get(testvar))) {
       stop(
-        "Variable ", sQuote(testvar),
+        "Variable ", sQuote(testvar, q = FALSE),
         " from previous script run does not match current script run.",
-        "\nFile", sQuote(tmp_RData), "is incompatible"
+        "\nFile", sQuote(tmp_RData, q = FALSE), "is incompatible"
       )
     }
   }
@@ -788,18 +808,20 @@ if (file.exists(tmp_RData)) {
     "lpjml_soilph_source",
     "lpjml_soil_ds"
   )) {
-    assign(takeover, get(paste0("tmp_", takeover)))
+    assign(takeover, tmp_env[[takeover]])
   }
-  rm(list = paste0("tmp_", savevar))
+  rm(tmp_env)
 } else {
   if (num_cluster > 1) {
     cat("Parallel execution of aggregation on", num_cluster, "tasks\n")
   }
   start_time <- proc.time()["elapsed"]
   if (parallel_mpi) {
+    # Wrap gridraster for sending it to parallel nodes
+    gridraster_wrapped <- terra::wrap(gridraster)
     # Reduce amount of data that needs to be transferred over the network to
     # parallel tasks by not exporting high-resolution HWSD source data
-    noexport <- "hwsd"
+    noexport <- c("hwsd", "gridraster")
     # Delete data from control task since it is not needed anymore
     rm(hwsd)
   } else {
@@ -808,38 +830,44 @@ if (file.exists(tmp_RData)) {
   # Make progress updates dependent on number of cells to process.
   # Set a lower progress_step for fewer updates.
   progress_step <- ifelse(gridheader$header["ncell"] < 100000, 50, 500)
+  incr <- 1000
   # In case of MPI-based parallelization .verbose is set to TRUE to give some
   # progress report in the control task. You may switch this off (FALSE) if you
   # do not need this.
+  # Make %dopar% from foreach package available.
+  library(foreach)
   aggregation_loop <- foreach(
-    cell = seq(1, gridheader$header["ncell"], by = 1000),
+    cell = seq(1, gridheader$header["ncell"], by = incr),
     .inorder = FALSE,
     .combine = rbind,
     .verbose = (parallel_mpi && num_cluster > 1),
-    .packages = c("raster", "geosphere"),
     .noexport = noexport
   ) %dopar% {
-#  for (cell in seq(1, gridheader$header["ncell"], by = 1000)) {
     if (!exists("hwsd")) {
       # If hwsd does not exist (MPI parallelization) reload it.
       # Each worker only needs to do this once, not for every loop iteration.
-      hwsd <- raster(hwsd_raster)
+      hwsd <- terra::rast(hwsd_raster)
       # Set projection.
-      proj4string(hwsd) <-
+      terra::crs(hwsd) <-
         "+proj=longlat +datum=WGS84 +ellps=WGS84 +towgs84=0,0,0"
       # Load hwsd into RAM, skip this part if your setup does not have enough
       # RAM. If hwsd is not loaded into memory processing will be slowed down
       # considerably.
-      if (!inMemory(hwsd)) {
-        hwsd <- readAll(hwsd)
+      if (!terra::inMemory(hwsd)) {
+        hwsd <- terra::toMemory(hwsd)
       }
-      # Expand the amount of memory the raster package can use before offloading
+      # Expand the amount of memory the terra package can use before offloading
       # to temporary files. Adjust this parameter to your system setup.
-      rasterOptions(maxmemory = 16e9, memfrac = 0.8)
-    } else if (!inMemory(hwsd)) {
+      terra::terraOptions(memmax = 10, memfrac = 0.8)
+    } else if (!terra::inMemory(hwsd)) {
       # Load hwsd into RAM, skip this part if your setup does not have enough
       # RAM.
-      hwsd <- readAll(hwsd)
+      hwsd <- terra::toMemory(hwsd)
+    }
+    # Unwrap gridraster in parallel nodes
+    if (!exists("gridraster")) {
+      gridraster <- terra::unwrap(gridraster_wrapped)
+      rm(gridraster_wrapped)
     }
     # Table which will collect results of all cells in one package.
     results_table <- cbind(
@@ -849,9 +877,10 @@ if (file.exists(tmp_RData)) {
       soil_ds = double(0),
       soilph_source = integer(0)
     )
-    for (c in seq(cell, min(cell + 999, gridheader$header["ncell"]))) {
-      if (c %% round(gridheader$header["ncell"] / progress_step) == 0 &&
-        !parallel_mpi
+    for (c in seq(cell, min(cell + incr - 1, gridheader$header["ncell"]))) {
+      if (
+        c %% round(gridheader$header["ncell"] / progress_step) == 0 &&
+          !parallel_mpi
       ) {
         # doParallel and registerDoSEQ send print output from workers to control
         # task whereas doMPI does not. So do not print progress reports for MPI
@@ -863,28 +892,31 @@ if (file.exists(tmp_RData)) {
       # reproducibility. Called for each cell to allow partial processing of
       # grid list.
       set.seed(c)
-      # Raster package may create temporary files that can take up substantial
-      # disk space. Keep track to delete them.
-      raster_names <- character(0)
       # Crop global map to cell extent
-      cell_hwsd <- crop(hwsd, extentFromCells(gridraster, gridraster_index[c]))
-      if (fromDisk(cell_hwsd)) {
-        raster_names <- c(raster_names, cell_hwsd@file@name)
-      }
+      cell_hwsd <- terra::crop(
+        hwsd,
+        terra::ext(gridraster, cells = gridraster_index[c])
+      )
       # Check to cropping returned expected number of source cells
-      if (ncell(cell_hwsd) != prod(aggregation_factor)) {
+      if (terra::ncell(cell_hwsd) != prod(aggregation_factor)) {
         # Error cropping source cells to extent of target cell.
         # stop() does not always work correctly inside dopar.
         message(
-          "Error: Wrong number of source cells ", ncell(cell_hwsd),
+          "Error: Wrong number of source cells ", terra::ncell(cell_hwsd),
           " in cell ", c, ". Expecting: ", prod(aggregation_factor)
         )
         return(NULL)
       }
 
       # Mapping units in cell subset
-      cell_mu <- unique(cell_hwsd)
-      if (length(intersect(cell_mu, att_mu)) == 0) {
+      cell_mu <- unlist(
+        terra::unique(cell_hwsd, incomparables = FALSE),
+        recursive = FALSE,
+        use.names = FALSE
+      )
+      # Filter possible missing values.
+      cell_mu <- intersect(cell_mu, att_mu)
+      if (length(cell_mu) == 0) {
         # HWSD has no data for LPJmL cell, skip further processing
         results_table <- rbind(
           results_table,
@@ -898,17 +930,11 @@ if (file.exists(tmp_RData)) {
           deparse.level = 0
         )
         rm(cell_hwsd, cell_mu)
-        # Clean up temporary raster files.
-        if (length(raster_names) > 0) {
-          file.remove(raster_names)
-          raster_names <- sub(".grd$", ".gri", raster_names)
-          file.remove(raster_names)
-          rm(raster_names)
-        }
+        # terra package may create temporary files that can take up substantial
+        # disk space. Delete them.
+        terra::tmpFiles(remove = TRUE)
         next
       }
-      # Filter possible missing values.
-      cell_mu <- intersect(cell_mu, att_mu)
       # Subset of attribute table
       index <- which(hwsd_attribute_table$MU_GLOBAL %in% cell_mu)
       cell_attribute_table <- hwsd_attribute_table[index, ]
@@ -921,10 +947,12 @@ if (file.exists(tmp_RData)) {
         cell_usda_area[[t]] <- double(0)
       }
       # Area of HWSD source cells
-      cell_hwsd_area <- cellarea(
-        yFromCell(cell_hwsd, seq_len(ncell(cell_hwsd))),
-        xres(cell_hwsd),
-        yres(cell_hwsd)
+      cell_hwsd_area <- lpjmlkit::calc_cellarea(
+        terra::yFromCell(cell_hwsd, seq_len(terra::ncell(cell_hwsd))),
+        terra::xres(cell_hwsd),
+        terra::yres(cell_hwsd),
+        earth_radius = LandInG_setup$earthradius,
+        return_unit = "m2"
       )
       # Area of each USDA texture class in LPJmL cell
       mu_area <- double(length(cell_mu))
@@ -1095,13 +1123,9 @@ if (file.exists(tmp_RData)) {
         )
         rm(cell_hwsd, cell_hwsd_area, cell_attribute_table, cell_usda,
            cell_usda_area, mu_area)
-        # Clean up temporary raster files.
-        if (length(raster_names) > 0) {
-          file.remove(raster_names)
-          raster_names <- sub(".grd$", ".gri", raster_names)
-          file.remove(raster_names)
-          rm(raster_names)
-        }
+        # terra package may create temporary files that can take up substantial
+        # disk space. Delete them.
+        terra::tmpFiles(remove = TRUE)
         next
       }
       # Set dominant texture class for cell c
@@ -1131,12 +1155,12 @@ if (file.exists(tmp_RData)) {
         dominant_usda_codes <- hwsd_usda_classes$CODE[codeindex]
         rm(nameindex, codeindex)
         # Attribute rows with matching dominant_usda_codes
-        subset_usda <- which(cell_attribute_table$T_USDA_TEX_CLASS %in%
-          dominant_usda_codes
+        subset_usda <- which(
+          cell_attribute_table$T_USDA_TEX_CLASS %in% dominant_usda_codes
         )
         # Attribute rows with matching mapping unit mu
-        subset_mu <- which(cell_attribute_table$MU_GLOBAL ==
-          as.integer(dominant_mu_in_class)
+        subset_mu <- which(
+          cell_attribute_table$MU_GLOBAL == as.integer(dominant_mu_in_class)
         )
         # Combination of texture class and mapping unit
         subset_usda_mu <- intersect(subset_usda, subset_mu)
@@ -1207,13 +1231,9 @@ if (file.exists(tmp_RData)) {
       }
       rm(cell_hwsd, cell_hwsd_area, dominant_mu_in_class, dominant_usda,
          cell_attribute_table, cell_usda, cell_usda_area, mu_area)
-      # Clean up temporary raster files.
-      if (length(raster_names) > 0) {
-        file.remove(raster_names)
-        raster_names <- sub(".grd$", ".gri", raster_names)
-        file.remove(raster_names)
-        rm(raster_names)
-      }
+      # terra package may create temporary files that can take up substantial
+      # disk space. Delete them.
+      terra::tmpFiles(remove = TRUE)
       results_table <- rbind(
         results_table,
         cbind(
@@ -1225,7 +1245,7 @@ if (file.exists(tmp_RData)) {
         )
       )
     }
-    # Return results_table to master task.
+    # Return results_table to control task.
     results_table
   } # End of foreach loop
 
@@ -1253,8 +1273,9 @@ if (file.exists(tmp_RData)) {
       )
     )
   }
-  if (any(aggregation_loop[, "cell"] < 1) ||
-    any(aggregation_loop[, "cell"] > gridheader$header["ncell"])
+  if (
+    any(aggregation_loop[, "cell"] < 1) ||
+      any(aggregation_loop[, "cell"] > gridheader$header["ncell"])
   ) {
     stop("Invalid cell ID in aggregation_loop")
   }
@@ -1267,13 +1288,15 @@ if (file.exists(tmp_RData)) {
     aggregation_loop[, "soilph_source"]
   rm(aggregation_loop)
 
-  # Make copies of variables and save to tmp_RData.
-  for (copyvar in savevar) {
-    assign(paste0("tmp_", copyvar), get(copyvar))
-  }
-  save(list = paste0("tmp_", savevar), file = tmp_RData)
-  cat("Preliminary results of aggregation saved to", sQuote(tmp_RData), "\n")
-  rm(list = paste0("tmp_", savevar))
+  # Save to tmp_RData.
+  LandInG_version <- LandInG_setup$LandInG_version
+  save(list = savevar, file = tmp_RData)
+  cat(
+    "Preliminary results of aggregation saved to",
+    sQuote(tmp_RData, q = FALSE),
+    "\n"
+  )
+  rm(LandInG_version)
   gc(reset = TRUE)
 }
 ################################################################################
@@ -1295,7 +1318,7 @@ if (file.exists(tmp_RData)) {
 ## not included in lpjml_soiltexture.                                         ##
 if (
   (anyNA(lpjml_soilph) && exists("lpjml_soilph_format")) ||
-  anyNA(lpjml_soiltexture)
+    anyNA(lpjml_soiltexture)
 ) {
   cat(
     "Derived soil texture has missing value in",
@@ -1316,18 +1339,18 @@ if (
     )
   }
   if (quicksearch) {
-    # Create raster for faster search
+    # Create terra rast object for faster search
     soilraster <- soilphraster <- gridraster
     soilraster[] <- NA
-    soilraster[cellFromXY(soilraster, griddata)] <- lpjml_soiltexture
+    soilraster[terra::cellFromXY(soilraster, griddata)] <- lpjml_soiltexture
     soilphraster[] <- NA
-    soilphraster[cellFromXY(soilraster, griddata)] <- lpjml_soilph
+    soilphraster[terra::cellFromXY(soilraster, griddata)] <- lpjml_soilph
   }
   lpjml_soiltexture_gapfilled <- lpjml_soiltexture
   lpjml_soilph_gapfilled <- lpjml_soilph
   if (exists("lpjml_soilph_format")) {
-    nacells <- which(is.na(lpjml_soiltexture_gapfilled) |
-      is.na(lpjml_soilph_gapfilled)
+    nacells <- which(
+      is.na(lpjml_soiltexture_gapfilled) | is.na(lpjml_soilph_gapfilled)
     )
   } else {
     nacells <- which(is.na(lpjml_soiltexture_gapfilled))
@@ -1347,17 +1370,26 @@ if (num_cluster > 1 && length(nacells) > 0) {
   if (parallel_local) {
     # Reduce number of CPUs used because this part has higher memory requirement
     num_cluster <- ceiling(num_cluster / 2)
-    registerDoParallel(num_cluster)
+    parallel::stopCluster(cl)
+    if (num_cluster > 1) {
+      cl <- parallel::makeCluster(num_cluster)
+      doParallel::registerDoParallel(cl)
+    } else {
+      foreach::registerDoSEQ()
+      parallel_local <- FALSE
+    }
   }
   # Split nacells into packages for parallel execution. Each package has between
   # 10 and 250 cells depending on number of missing cells and number of parallel
   # tasks
   tmplist <- list()
-  for (c in seq(
-    1,
-    length(nacells),
-    by = min(max(10, length(nacells) %/% num_cluster), 150)
-  )) {
+  for (
+    c in seq(
+      1,
+      length(nacells),
+      by = min(max(10, length(nacells) %/% num_cluster), 150)
+    )
+  ) {
     index <- seq(
       c,
       min(
@@ -1378,31 +1410,48 @@ if (num_cluster > 1 && length(nacells) > 0) {
 if (parallel_mpi) {
   # Reduce amount of data that needs to be transferred over the network to
   # parallel tasks by not exporting high-resolution HWSD source data
-  noexport <- "hwsd"
+  noexport <- c("hwsd", "gridraster")
+  # Wrap soilraster & soilphraster for sending it to parallel nodes
+  if (exists("soilraster")) {
+    soilraster_wrapped <- terra::wrap(soilraster)
+    soilphraster_wrapped <- terra::wrap(soilphraster)
+    noexport <- c(noexport, "soilraster", "soilphraster")
+  }
+  if (!exists("gridraster_wrapped")) {
+    gridraster_wrapped <- terra::wrap(gridraster)
+  }
 } else {
   noexport <- NULL
 }
+# Make %dopar% from foreach package available.
+library(foreach)
 gapfill_loop <- foreach(
   cellgroup = seq_len(length(nacells)),
   .inorder = FALSE,
   .combine = rbind,
   .verbose = (parallel_mpi && num_cluster > 1),
-  .packages = c("raster", "geosphere"),
   .noexport = noexport
 ) %dopar% {
   if (!exists("hwsd")) {
+    # Expand the amount of memory the terra package can use before offloading
+    # to temporary files. Adjust this parameter to your system setup.
+    terra::terraOptions(memmax = 10, memfrac = 0.8)
     # Reload hwsd if not available on task.
-    hwsd <- raster(hwsd_raster)
+    hwsd <- terra::rast(hwsd_raster)
     # Set projection.
-    proj4string(hwsd) <- "+proj=longlat +datum=WGS84 +ellps=WGS84 +towgs84=0,0,0"
+    terra::crs(hwsd) <- "+proj=longlat +datum=WGS84 +ellps=WGS84 +towgs84=0,0,0"
     # Load hwsd into RAM, skip this part if your setup does not have enough RAM
-    if (!inMemory(hwsd)) {
-      hwsd <- readAll(hwsd)
+    if (!terra::inMemory(hwsd)) {
+      hwsd <- terra::toMemory(hwsd)
     }
-    rasterOptions(maxmemory = 16e9, memfrac = 0.8)
-  } else if (!inMemory(hwsd)) {
+  } else if (!terra::inMemory(hwsd)) {
     # Load hwsd into RAM, skip this part if your setup does not have enough RAM
-    hwsd <- readAll(hwsd)
+    hwsd <- terra::toMemory(hwsd)
+  }
+  # Unwrap gridraster in parallel nodes
+  if (!exists("gridraster")) {
+    gridraster <- terra::unwrap(gridraster_wrapped)
+    rm(gridraster_wrapped)
   }
   # Table which will collect results of all cells in one package
   results_table <- data.frame(
@@ -1444,18 +1493,41 @@ gapfill_loop <- foreach(
       dist <- c(lon = 0, lat = 0)
       # Search window increment is set to resolution of gridraster. This could
       # be set to res(hwsd) instead but would slow down search substantially
-      search_incr <- res(gridraster)
-      while (all(res(gridraster) / 2 + dist + search_incr < max_search) &&
-        (is.na(lpjml_soiltexture_gapfilled[cell]) ||
-        (is.na(lpjml_soilph_gapfilled[cell]) && exists("lpjml_soilph_format")))
+      search_incr <- terra::res(gridraster)
+      while (
+        all(terra::res(gridraster) / 2 + dist + search_incr < max_search) && (
+          is.na(lpjml_soiltexture_gapfilled[cell]) || (
+            exists("lpjml_soilph_format") && is.na(lpjml_soilph_gapfilled[cell])
+          )
+        )
       ) {
         # Need to gap-fill soil texture class or soil pH
         # Expand search window
         dist <- dist + search_incr
         # Find cells in box with size of LPJmL grid resolution + dist
-        boxextent <- extentFromCells(gridraster, gridraster_index[cell]) +
-          dist * 2
+        boxextent <- terra::ext(gridraster, cells = gridraster_index[cell]) +
+          dist
+        if (terra::xmin(boxextent) < -180) {
+          boxextent2 <- terra::ext(
+            terra::xmin(boxextent) + 360,
+            180,
+            terra::ymin(boxextent),
+            terra::ymax(boxextent)
+          )
+        } else if (terra::xmax(boxextent) > 180) {
+          boxextent2 <- terra::ext(
+            -180,
+            terra::xmax(boxextent) - 360,
+            terra::ymin(boxextent),
+            terra::ymax(boxextent)
+          )
+        }
         if (quicksearch) {
+          if (!exists("soilraster")) {
+            soilraster <- terra::unwrap(soilraster_wrapped)
+            soilphraster <- terra::unwrap(soilphraster_wrapped)
+            rm(soilraster_wrapped, soilphraster_wrapped)
+          }
           # To speed up search use lpjml_soiltexture/lpjml_soilph instead of
           # HWSD raster to search for cells with values.
           # This may expand the search window too much in some cases if HWSD has
@@ -1465,134 +1537,118 @@ gapfill_loop <- foreach(
           if (is.na(lpjml_soiltexture_gapfilled[cell])) {
             # If soil texture needs gap-filling check soil texture data in
             # window
-            cellsearch <- crop(soilraster, boxextent)
+            cellsearch <- terra::crop(soilraster, boxextent)
           } else {
             # If only soil pH needs gap-filling check soil pH data in window
-            cellsearch <- crop(soilphraster, boxextent)
+            cellsearch <- terra::crop(soilphraster, boxextent)
           }
-          if (xmin(boxextent) < -180) {
-            boxextent2 <- extent(
-              xmin(boxextent) + 360,
-              180,
-              ymin(boxextent),
-              ymax(boxextent)
-            )
-            if (xmax(boxextent2) - xmin(boxextent2) > xres(hwsd) / 2) {
+          if (exists("boxextent2")) {
+            if (
+              terra::xmax(boxextent2) - terra::xmin(boxextent2) >
+                terra::xres(hwsd) / 2
+            ) {
               # Make sure boxextent2 is at least one cell wide and not just
               # numerical inaccuracies
               if (is.na(lpjml_soiltexture_gapfilled[cell])) {
-                cellsearch2 <- crop(soilraster, boxextent2)
+                cellsearch2 <- terra::crop(soilraster, boxextent2)
               } else {
-                cellsearch2 <- crop(soilphraster, boxextent2)
+                cellsearch2 <- terra::crop(soilphraster, boxextent2)
               }
             } else {
-              cellsearch2 <- raster(matrix(c(NA, NA)))
+              cellsearch2 <- terra::rast(matrix(c(NA, NA)))
             }
-            rm(boxextent2)
-          } else if (xmax(boxextent) > 180) {
-            boxextent2 <- extent(
-              -180,
-              xmax(boxextent) - 360,
-              ymin(boxextent),
-              ymax(boxextent)
-            )
-            if (xmax(boxextent2) - xmin(boxextent2) > xres(hwsd) / 2) {
-              # Make sure boxextent2 is at least one cell wide and not just
-              # numerical inaccuracies.
-              if (is.na(lpjml_soiltexture_gapfilled[cell])) {
-                cellsearch2 <- crop(soilraster, boxextent2)
-              } else {
-                cellsearch2 <- crop(soilphraster, boxextent2)
-              }
-            } else {
-              cellsearch2 <- raster(matrix(c(NA, NA)))
-            }
-            rm(boxextent2)
           } else {
-            cellsearch2 <- raster(matrix(c(NA, NA)))
+            cellsearch2 <- terra::rast(matrix(c(NA, NA)))
           }
-          if (all(is.na(values(cellsearch))) &&
-            all(is.na(values(cellsearch2)))
+          if (
+            all(is.na(terra::values(cellsearch))) &&
+              all(is.na(terra::values(cellsearch2)))
           ) {
             # No cells in soilraster/soilphraster have soil code, assume that
             # HWSD has no data either and skip to next iteration with larger
             # search window
             rm(cellsearch, cellsearch2, boxextent)
+            if (exists("boxextent2")) {
+              rm(boxextent2)
+            }
             next
           }
           rm(cellsearch, cellsearch2)
         }
-        # Raster package may create temporary files that can take up substantial
-        # disk space. Keep track to delete them.
-        raster_names <- character(0)
         # Now check actual HWSD data.
-        cell_hwsd <- crop(hwsd, boxextent)
-        if (fromDisk(cell_hwsd)) {
-          raster_names <- c(raster_names, cell_hwsd@file@name)
-        }
+        cell_hwsd <- terra::crop(hwsd, boxextent)
         # If box crosses 180° E/W line, find pixels across the line
-        if (xmin(boxextent) < -180) {
-          boxextent2 <- extent(
-            xmin(boxextent) + 360,
-            180,
-            ymin(boxextent),
-            ymax(boxextent)
-          )
-          cell_hwsd2 <- crop(hwsd, boxextent2)
-          if (fromDisk(cell_hwsd2)) {
-            raster_names <- c(raster_names, cell_hwsd2@file@name)
-          }
-          rm(boxextent2)
-        } else if (xmax(boxextent) > 180) {
-          boxextent2 <- extent(
-            -180,
-            xmax(boxextent) - 360,
-            ymin(boxextent),
-            ymax(boxextent)
-          )
-          cell_hwsd2 <- crop(hwsd, boxextent2)
-          if (fromDisk(cell_hwsd2)) {
-            raster_names <- c(raster_names, cell_hwsd2@file@name)
+        if (exists("boxextent2")) {
+          if(
+            terra::xmax(boxextent2) - terra::xmin(boxextent2) >
+              terra::xres(hwsd) / 2
+          ) {
+            cell_hwsd2 <- terra::crop(hwsd, boxextent2)
+          } else {
+            cell_hwsd2 <- terra::rast(ncol = 1, nrow = 1, vals = NA)
           }
           rm(boxextent2)
         } else {
-          cell_hwsd2 <- integer(0)
+          cell_hwsd2 <- terra::rast(ncol = 1, nrow = 1, vals = NA)
         }
-        cell_mu <- unique(unique(cell_hwsd), unique(cell_hwsd2))
-        if (length(intersect(cell_mu, att_mu)) == 0) {
+        cell_mu <- c(
+          unlist(
+            terra::unique(cell_hwsd, incomparables = FALSE),
+            recursive = FALSE,
+            use.names = FALSE
+          ),
+          unlist(
+            terra::unique(cell_hwsd2, incomparables = FALSE),
+            recursive = FALSE,
+            use.names = FALSE
+          )
+        )
+        cell_mu <- intersect(cell_mu, att_mu)
+        if (length(cell_mu) == 0) {
           # HWSD has no data for LPJmL cell, skip to next iteration with larger
           # search window.
           rm(cell_hwsd, cell_hwsd2, boxextent, cell_mu)
-          # Clean up temporary raster files.
-          if (length(raster_names) > 0) {
-            file.remove(raster_names)
-            raster_names <- sub(".grd$", ".gri", raster_names)
-            file.remove(raster_names)
-            rm(raster_names)
-          }
+          # terra package may create temporary files that can take up
+          # substantial disk space. Delete them.
+          terra::tmpFiles(remove = TRUE)
           next
         }
-        cell_mu <- intersect(cell_mu, att_mu)
+        
         # Extract only cells with valid soil information from search window.
         cell_hwsd_valid <-  which(cell_hwsd[] %in% att_mu)
-        cell_hwsd_valid_area <- cellarea(
-          yFromCell(cell_hwsd, cell_hwsd_valid),
-          xres(cell_hwsd),
-          yres(cell_hwsd)
+        cell_hwsd_valid_area <- lpjmlkit::calc_cellarea(
+          terra::yFromCell(cell_hwsd, cell_hwsd_valid),
+          terra::xres(cell_hwsd),
+          terra::yres(cell_hwsd),
+          earth_radius = LandInG_setup$earthradius,
+          return_unit = "m2"
         )
-        cell_hwsd_valid_coords <- xyFromCell(cell_hwsd, cell_hwsd_valid)
-        cell_hwsd_valid <- cell_hwsd[cell_hwsd_valid]
+        cell_hwsd_valid_coords <- terra::xyFromCell(cell_hwsd, cell_hwsd_valid)
+        cell_hwsd_valid <- unlist(
+          cell_hwsd[cell_hwsd_valid],
+          recursive = FALSE,
+          use.names = FALSE
+        )
         rm(cell_hwsd)
         # Append values across the 180° E/W line.
-        if (xmin(boxextent) < -180 || xmax(boxextent) > 180) {
+        if (terra::xmin(boxextent) < -180 || terra::xmax(boxextent) > 180) {
           cell_hwsd2_valid <-  which(cell_hwsd2[] %in% att_mu)
-          cell_hwsd2_valid_area <- cellarea(
-            yFromCell(cell_hwsd2, cell_hwsd2_valid),
-            xres(cell_hwsd2),
-            yres(cell_hwsd2)
+          cell_hwsd2_valid_area <- lpjmlkit::calc_cellarea(
+            terra::yFromCell(cell_hwsd2, cell_hwsd2_valid),
+            terra::xres(cell_hwsd2),
+            terra::yres(cell_hwsd2),
+            earth_radius = LandInG_setup$earthradius,
+            return_unit = "m2"
           )
-          cell_hwsd2_valid_coords <- xyFromCell(cell_hwsd2, cell_hwsd2_valid)
-          cell_hwsd2_valid <- cell_hwsd2[cell_hwsd2_valid]
+          cell_hwsd2_valid_coords <- terra::xyFromCell(
+            cell_hwsd2,
+            cell_hwsd2_valid
+          )
+          cell_hwsd2_valid <- unlist(
+            cell_hwsd2[cell_hwsd2_valid],
+            recursive = FALSE,
+            use.names = FALSE
+          )
           # Append to main data
           cell_hwsd_valid <- c(cell_hwsd_valid, cell_hwsd2_valid)
           cell_hwsd_valid_area <- c(cell_hwsd_valid_area, cell_hwsd2_valid_area)
@@ -1604,20 +1660,19 @@ gapfill_loop <- foreach(
           rm(cell_hwsd2, cell_hwsd2_valid, cell_hwsd2_valid_area,
              cell_hwsd2_valid_coords)
         }
-        # Clean up temporary raster files.
-        if (length(raster_names) > 0) {
-          file.remove(raster_names)
-          raster_names <- sub(".grd$", ".gri", raster_names)
-          file.remove(raster_names)
-          rm(raster_names)
-        }
+        # terra package may create temporary files that can take up substantial
+        # disk space. Delete them.
+        terra::tmpFiles(remove = TRUE)
         # Inverse distance weighting of cells in search window. This reduces the
         # cell area of cells that are farther away
-        cell_hwsd_valid_dist <- distHaversine(
+        cell_hwsd_valid_dist <- geosphere::distHaversine(
           cell_hwsd_valid_coords,
           griddata[cell, ],
-          r = earthradius
+          r = LandInG_setup$earthradius
         )
+        if (length(cell_hwsd_valid_area) != length(cell_hwsd_valid_dist)) {
+          stop("Length mismatch")
+        }
         rm(cell_hwsd_valid_coords)
         if (idw_power_par > 0) {
           cell_hwsd_valid_area <- cell_hwsd_valid_area /
@@ -1808,7 +1863,7 @@ gapfill_loop <- foreach(
           cell_table$soiltexture_nvalid <- length(cell_hwsd_valid)
           cell_table$soiltexture_mindist <- min(cell_hwsd_valid_dist)
           cell_table$soiltexture_maxdist <- max(cell_hwsd_valid_dist)
-          cell_table$soiltexture_window <- max(res(gridraster) + dist * 2)
+          cell_table$soiltexture_window <- max(terra::res(gridraster) + dist * 2)
         } else {
           # Otherwise only soil pH is missing, read texture class from
           # lpjml_soiltexture_gapfilled[cell]
@@ -1826,8 +1881,8 @@ gapfill_loop <- foreach(
         # Now determine pH value for the assigned soil texture. This is only
         # done if lpjml_soilph_format exists, i.e. if file creation has not been
         # skipped.
-        if (exists("lpjml_soilph_format") &&
-          is.na(lpjml_soilph_gapfilled[cell])
+        if (
+          exists("lpjml_soilph_format") && is.na(lpjml_soilph_gapfilled[cell])
         ) {
           # Translate LPJmL texture class name back to texture index from column
           # T_USDA_TEX_CLASS, may be more than one USDA class
@@ -1839,12 +1894,12 @@ gapfill_loop <- foreach(
           dominant_usda_codes <- hwsd_usda_classes$CODE[codeindex]
           rm(codeindex, nameindex)
           # Attribute rows with matching dominant_usda_codes
-          subset_usda <- which(cell_attribute_table$T_USDA_TEX_CLASS %in%
-            dominant_usda_codes
+          subset_usda <- which(
+            cell_attribute_table$T_USDA_TEX_CLASS %in% dominant_usda_codes
           )
           # Attribute rows with matching mapping unit mu
-          subset_mu <- which(cell_attribute_table$MU_GLOBAL ==
-            as.integer(dominant_mu_in_class)
+          subset_mu <- which(
+            cell_attribute_table$MU_GLOBAL == as.integer(dominant_mu_in_class)
           )
           # Combination of texture class and mapping unit
           subset_usda_mu <- intersect(subset_usda, subset_mu)
@@ -1921,13 +1976,17 @@ gapfill_loop <- foreach(
             cell_table$soilph_nvalid <- length(cell_hwsd_valid)
             cell_table$soilph_mindist <- min(cell_hwsd_valid_dist)
             cell_table$soilph_maxdist <- max(cell_hwsd_valid_dist)
-            cell_table$soilph_window <- max(res(gridraster) + dist * 2)
+            cell_table$soilph_window <- max(terra::res(gridraster) + dist * 2)
           }
         } # End of soil pH processing
       } # End of while loop (window search)
 
-      if (!allow_skip && (is.na(lpjml_soiltexture_gapfilled[cell]) ||
-        (exists("lpjml_soilph_format") && is.na(lpjml_soilph_gapfilled[cell])))
+      if (
+        !allow_skip && (
+          is.na(lpjml_soiltexture_gapfilled[cell]) || (
+            exists("lpjml_soilph_format") && is.na(lpjml_soilph_gapfilled[cell])
+          )
+        )
       ) {
         warning(
           toString(
@@ -1967,7 +2026,11 @@ gapfill_loop <- foreach(
          cell_usda_area, mu_area)
       gc(full = FALSE)
       if (!is.na(cell_table$cell)) {
-        results_table <- rbind(results_table, cell_table, deparse.level = 0)
+        results_table <- rbind(
+          results_table, cell_table,
+          deparse.level = 0,
+          make.row.names = FALSE
+        )
       }
     } # End of loop over cells in group
     if (!parallel_mpi) {
@@ -1985,12 +2048,13 @@ gapfill_loop <- foreach(
       )
     }
   }
-  # Return results_table to master task
+  # Return results_table to control task
   results_table
 }
   
-if ((exists("lpjml_soilph_format") && anyNA(lpjml_soilph)) ||
-  anyNA(lpjml_soiltexture)
+if (
+  (exists("lpjml_soilph_format") && anyNA(lpjml_soilph)) ||
+    anyNA(lpjml_soiltexture)
 ) {
   missing_texture <- which(is.na(lpjml_soiltexture))
   # Check validity of gapfill_loop
@@ -2139,7 +2203,7 @@ if (anyNA(lpjml_soiltexture)) {
   if (allow_skip) {
     cat(
       "Setting", length(which(is.na(lpjml_soiltexture))),
-      "NA values in lpjml_soiltexture to", sQuote(0),
+      "NA values in lpjml_soiltexture to", sQuote(0, q = FALSE),
       "which will skip them in LPJmL simulations.\n"
     )
     lpjml_soiltexture[which(is.na(lpjml_soiltexture))] <- 0
@@ -2154,7 +2218,7 @@ if (exists("lpjml_soilph_format") && anyNA(lpjml_soilph)) {
   if (allow_skip) {
     cat(
       "Setting", length(which(is.na(lpjml_soilph))),
-      "cells in lpjml_soiltexture to", sQuote(0),
+      "cells in lpjml_soiltexture to", sQuote(0, q = FALSE),
       "due to missing soil pH value.",
       "This will skip them in LPJmL simulations.\n"
     )
@@ -2168,16 +2232,13 @@ if (exists("lpjml_soilph_format") && anyNA(lpjml_soilph)) {
     )
   }
 }
-# Make copies of variables and save to tmp_RData
-for (copyvar in savevar) {
-  assign(paste0("tmp_", copyvar), get(copyvar))
-}
-save(list = paste0("tmp_", savevar), file = tmp_RData)
-rm(list = paste0("tmp_", savevar))
-cat("Results after gap-filling saved to", sQuote(tmp_RData), "\n")
+LandInG_version <- LandInG_setup$LandInG_version
+save(list = savevar, file = tmp_RData)
+rm(LandInG_version)
+cat("Results after gap-filling saved to", sQuote(tmp_RData, q = FALSE), "\n")
 
 if (lpjml_soil_format == "BIN") {
-  soiltexture_header <- create_header(
+  soiltexture_header <- lpjmlkit::create_header(
     name = lpjml_soil_headername,
     version = lpjml_soil_version,
     nyear = 1,
@@ -2188,21 +2249,23 @@ if (lpjml_soil_format == "BIN") {
     cellsize_lat = gridheader$header["cellsize_lat"],
     datatype = ifelse(lpjml_soil_version > 2, 0, 1)
   )
-  write_header(lpjml_soiltexture_name, soiltexture_header)
+  lpjmlkit::write_header(lpjml_soiltexture_name, soiltexture_header)
   soiltexture_file <- file(lpjml_soiltexture_name, "ab")
-  if (typeof(get_datatype(soiltexture_header)$type) == "raw") {
+  if (typeof(lpjmlkit::get_datatype(soiltexture_header)$type) == "raw") {
     writeBin(as.raw(lpjml_soiltexture), soiltexture_file, size = 1)
-  } else if (typeof(get_datatype(soiltexture_header)$type) == "integer") {
+  } else if (
+    typeof(lpjmlkit::get_datatype(soiltexture_header)$type) == "integer"
+  ) {
     writeBin(
       as.integer(lpjml_soiltexture),
       soiltexture_file,
-      size = get_datatype(soiltexture_header)$size
+      size = lpjmlkit::get_datatype(soiltexture_header)$size
     )
   } else {
     writeBin(
       as.double(lpjml_soiltexture),
       soiltexture_file,
-      size = get_datatype(soiltexture_header)$size
+      size = lpjmlkit::get_datatype(soiltexture_header)$size
     )
   }
   close(soiltexture_file)
@@ -2215,21 +2278,32 @@ if (lpjml_soil_format == "BIN") {
     row.names = FALSE
   )
 } else {
-  # Assume raster format.
+  # Assume raster format supported by terra package.
   soilraster <- gridraster
   soilraster[] <- NA
-  soilraster[cellFromXY(soilraster, griddata)] <- lpjml_soiltexture
+  soilraster[terra::cellFromXY(soilraster, griddata)] <- lpjml_soiltexture
   # This will fail if lpjml_soil_format is not a valid format supported by the
-  # raster package.
-  writeRaster(
-    soilraster,
-    filename = lpjml_soiltexture_name,
-    varname = "soilcode",
-    datatype = "INT2S",
-    NAflag = -999
-  )
+  # terra package.
+  if (grepl("^nc", lpjml_soil_format, ignore.case = TRUE)) {
+    # Assume NetCDF format
+    terra::writeCDF(
+      soilraster,
+      filename = lpjml_soiltexture_name,
+      prec = "short",
+      varname = "soilcode",
+      missval = -999
+    )
+  } else {
+    terra::writeRaster(
+      soilraster,
+      filename = lpjml_soiltexture_name,
+      names = "soilcode",
+      datatype = "INT2S",
+      NAflag = -999
+    )
+  }
 }
-cat("Soil texture saved to", sQuote(lpjml_soiltexture_name), "\n")
+cat("Soil texture saved to", sQuote(lpjml_soiltexture_name, q = FALSE), "\n")
 
 if (exists("lpjml_soilph_format")) {
   if (lpjml_soilph_format == "BIN") {
@@ -2238,7 +2312,7 @@ if (exists("lpjml_soilph_format")) {
     } else {
       scalar <- 0.01
     }
-    soilph_header <- create_header(
+    soilph_header <- lpjmlkit::create_header(
       name = lpjml_soilph_headername,
       version = lpjml_soilph_version,
       nyear = 1,
@@ -2247,23 +2321,23 @@ if (exists("lpjml_soilph_format")) {
       cellsize_lon = gridheader$header["cellsize_lon"],
       scalar = scalar,
       cellsize_lat = gridheader$header["cellsize_lat"],
-      datatype = ifelse(lpjml_soil_version > 2, 3, 1)
+      datatype = ifelse(lpjml_soilph_version > 2, 3, 1)
     )
-    write_header(lpjml_soilph_name, soilph_header)
+    lpjmlkit::write_header(lpjml_soilph_name, soilph_header)
     soilph_file <- file(lpjml_soilph_name, "ab")
-    if (typeof(get_datatype(soilph_header)$type) == "raw") {
+    if (typeof(lpjmlkit::get_datatype(soilph_header)$type) == "raw") {
       writeBin(as.raw(round(lpjml_soilph / scalar)), soilph_file, size = 1)
-    } else if (typeof(get_datatype(soilph_header)$type) == "integer") {
+    } else if (typeof(lpjmlkit::get_datatype(soilph_header)$type) == "integer") {
       writeBin(
         as.integer(round(lpjml_soilph / scalar)),
         soilph_file,
-        size = get_datatype(soilph_header)$size
+        size = lpjmlkit::get_datatype(soilph_header)$size
       )
     } else {
       writeBin(
         as.double(lpjml_soilph / scalar),
         soilph_file,
-        size = get_datatype(soilph_header)$size
+        size = lpjmlkit::get_datatype(soilph_header)$size
       )
     }
     close(soilph_file)
@@ -2274,21 +2348,32 @@ if (exists("lpjml_soilph_format")) {
       row.names = FALSE
     )
   } else {
-    # Assume raster format.
+    # Assume raster format supported by terra package.
     soilraster <- gridraster
     soilraster[] <- NA
-    soilraster[cellFromXY(soilraster, griddata)] <- lpjml_soilph
+    soilraster[terra::cellFromXY(soilraster, griddata)] <- lpjml_soilph
     # This will fail if lpjml_soilph_format is not a valid format supported by
-    # the raster package.
-    writeRaster(
-      soilraster,
-      filename = lpjml_soilph_name,
-      varname = "soilph",
-      datatype = "FLT4S",
-      NAflag = -9999.99
-    )
+    # the terra package.
+    if (grepl("^nc", lpjml_soilph_format, ignore.case = TRUE)) {
+      # Assume NetCDF format
+      terra::writeCDF(
+        soilraster,
+        filename = lpjml_soilph_name,
+        prec = "float",
+        varname = "soilph",
+        missval = -9999.99
+      )
+    } else {
+      terra::writeRaster(
+        soilraster,
+        filename = lpjml_soilph_name,
+        names = "soilph",
+        datatype = "FLT4S",
+        NAflag = -9999.99
+      )
+    }
   }
-  cat("Soil pH saved to", sQuote(lpjml_soilph_name), "\n")
+  cat("Soil pH saved to", sQuote(lpjml_soilph_name, q = FALSE), "\n")
 }
 ################################################################################
 

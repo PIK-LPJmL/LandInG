@@ -24,7 +24,7 @@ if (nchar(glwd_dir) > 0) {
 }
 ## Grid file:                                                                 ##
 ## Must be in LPJmL input format.                                             ##
-gridname <- "ENTER_GRID_FILE_HERE"
+gridname <- stop("ENTER_GRID_FILE_HERE")
 ##                                                                            ##
 ## GLWD Level 3:                                                              ##
 ## Grid in ArcView/ArcInfo coverage format at 30 x 30 second resolution       ##
@@ -37,7 +37,7 @@ glwd3_classes <- c(lakes = 1, rivers = 3)
 version_string <- ""
 ## Output format: Either "BIN" (native LPJmL input format with header), "RAW" ##
 ## (LPJmL input format without header) or any raster format supported by the  ##
-## raster package, such as "NC" or "ASC". Note: Formats "RAW" and "BIN" with  ##
+## terra package, such as "NC" or "ASC". Note: Formats "RAW" and "BIN" with   ##
 ## with version < 3 will round fractions to full percent.                     ##
 output_format <- "BIN"
 ## Version of "BIN" format used. Only version 3 allows for longitude and      ##
@@ -50,82 +50,72 @@ headername <- "LPJLAKE"
 ################################################################################
 
 ################################################################################
-## Helper functions for LPJmL input format                                    ##
-## The script lpjml_format_helper_functions.R is saved in the parent          ##
-## directory by default.                                                      ##
+## Helper functions for LPJmL input format and basic LandInG setup.           ##
+## The script landing_setup.R is saved in the parent directory by default.    ##
 ################################################################################
-if (file.exists("../lpjml_format_helper_functions.R")) {
-  source("../lpjml_format_helper_functions.R")
-} else {
-  stop("Please update path to script with LPJmL input format helper function")
+if (file.exists("../landing_setup.R")) {
+  source("../landing_setup.R", chdir = TRUE)
+} else if (!exists("LandInG_setup") || !is.environment(LandInG_setup)) {
+  stop("Please update path to script with LandInG setup script")
 }
 
 ################################################################################
-## Load required R packages. These may need to be installed first.            ##
-library(raster)
-library(rgdal)
+## Check for required R packages. These may need to be installed first.       ##
+if (!"terra" %in% .packages(all.available = TRUE)) {
+  stop("Please install required package 'terra'")
+}
 ################################################################################
 
 ################################################################################
 ## Load GLWD3 data.                                                           ##
+# Set memory limit for terra package. May need to be adjusted to memory
+# available on your system.
+# progress = 0 suppresses the display of progress bars in terra operations.
+terra::terraOptions(memmax = 16, memfrac = 0.8, progress = 0)
 cat("Load GLWD Level 3 data from", sQuote(glwd3_name), "\n")
-glwd3_raster <- raster(glwd3_name)
+glwd3_raster <- terra::rast(glwd3_name)
 # longlat projection string
 ps <- "+proj=longlat +datum=WGS84 +ellps=WGS84 +towgs84=0,0,0"
-if (all(
-  abs(xmin(glwd3_raster) + 180) / xres(glwd3_raster) < 0.01,
-  abs(xmax(glwd3_raster) - 180) / xres(glwd3_raster) < 0.01,
-  abs(ymin(glwd3_raster) + 90) / yres(glwd3_raster) < 0.01,
-  abs(ymax(glwd3_raster) - 90) / yres(glwd3_raster) < 0.01
-)) {
+if (
+  all(
+    abs(terra::xmin(glwd3_raster) + 180) / terra::xres(glwd3_raster) < 0.01,
+    abs(terra::xmax(glwd3_raster) - 180) / terra::xres(glwd3_raster) < 0.01,
+    abs(terra::ymin(glwd3_raster) + 90) / terra::yres(glwd3_raster) < 0.01,
+    abs(terra::ymax(glwd3_raster) - 90) / terra::yres(glwd3_raster) < 0.01
+  )
+) {
   # Raster is roughly global, set to exact global extent
-  extent(glwd3_raster) <- extent(-180, 180, -90, 90)
+  terra::ext(glwd3_raster) <- terra::ext(-180, 180, -90, 90)
   # Set longlat projection
-  proj4string(glwd3_raster) <- ps
+  terra::crs(glwd3_raster) <- ps
 }
 ################################################################################
 
 ################################################################################
 ## Load grid file.                                                            ##
-## Functions read_header(), get_headersize(), get_datatype() defined in       ##
-## lpjml_format_helper_functions.R                                            ##
 cat("Load grid from", sQuote(gridname), "\n")
-gridheader <- read_header(gridname)
-gridfile <- file(gridname, "rb")
-seek(gridfile, get_headersize(gridheader))
-griddata <- matrix(
-  readBin(
-    gridfile,
-    what = get_datatype(gridheader)$type,
-    size = get_datatype(gridheader)$size,
-    n = gridheader$header["nbands"] * gridheader$header["ncell"],
-    endian = gridheader$endian
-  ) * gridheader$header["scalar"],
-  ncol = gridheader$header["nbands"],
-  byrow = TRUE,
-  dimnames = list(NULL, c("lon", "lat"))
-)
-close(gridfile)
+gridheader <- lpjmlkit::read_header(gridname)
+griddata <- lpjmlkit::read_grid(gridname, silent = TRUE)$data
 # Create grid raster from coordinates.
-gridextent <- extent(
+gridextent <- terra::ext(
   min(griddata[, "lon"]) - gridheader[["header"]]["cellsize_lon"] / 2,
   max(griddata[, "lon"]) + gridheader[["header"]]["cellsize_lon"] / 2,
   min(griddata[, "lat"]) - gridheader[["header"]]["cellsize_lat"] / 2,
   max(griddata[, "lat"]) + gridheader[["header"]]["cellsize_lat"] / 2
 )
-gridraster <- raster(
+gridraster <- terra::rast(
   gridextent,
-  resolution = gridheader$header[c("cellsize_lon", "cellsize_lat")]
+  resolution = gridheader$header[c("cellsize_lon", "cellsize_lat")],
+  crs = ps
 )
-# Calculate grid area. Function cellarea() defined in
-# lpjml_format_helper_functions.R.
-gridarea <- cellarea(
+# Calculate grid area.
+gridarea <- lpjmlkit::calc_cellarea(
   griddata[, "lat"],
   gridheader$header["cellsize_lon"],
-  gridheader$header["cellsize_lat"]
+  gridheader$header["cellsize_lat"],
+  earth_radius = LandInG_setup$earthradius,
+  return_unit = "m2"
 )
-# Set projection.
-proj4string(gridraster) <- ps
 # Determine resolution string to be used in files created by this script.
 tmp_res <- unique(
   ifelse(
@@ -181,10 +171,16 @@ if (length(grep("lake|river", names(glwd3_classes), ignore.case = TRUE)) == 2) {
         )
       }
     } else if (output_format == "BIN") {
-      outputheader <- read_header(outputname)
-      if (outputheader$header["ncell"] != gridheader$header["ncell"] ||
-        any(outputheader$header[c("cellsize_lon", "cellsize_lat")] !=
-        gridheader$header[c("cellsize_lon", "cellsize_lat")])
+      outputheader <- lpjmlkit::read_header(outputname)
+      if (
+        outputheader$header["ncell"] != gridheader$header["ncell"] ||
+          !isTRUE(
+            all.equal(
+              outputheader$header[c("cellsize_lon", "cellsize_lat")],
+              gridheader$header[c("cellsize_lon", "cellsize_lat")],
+              tolerance = LandInG_setup$single.eps
+            )
+          )
       ) {
         stop(
           "Output file ", sQuote(outputname),
@@ -230,10 +226,16 @@ for (type in names(glwd3_classes)) {
         )
       }
     } else if (output_format == "BIN") {
-      outputheader <- read_header(outputname)
-      if (outputheader$header["ncell"] != gridheader$header["ncell"] ||
-        any(outputheader$header[c("cellsize_lon", "cellsize_lat")] !=
-        gridheader$header[c("cellsize_lon", "cellsize_lat")])
+      outputheader <- lpjmlkit::read_header(outputname)
+      if (
+        outputheader$header["ncell"] != gridheader$header["ncell"] ||
+          !isTRUE(
+            all.equal(
+              outputheader$header[c("cellsize_lon", "cellsize_lat")],
+              gridheader$header[c("cellsize_lon", "cellsize_lat")],
+              tolerance = LandInG_setup$single.eps
+            )
+          )
       ) {
         stop(
           "Output file ", sQuote(outputname), " exists already ",
@@ -254,16 +256,15 @@ for (type in names(glwd3_classes)) {
     }
   }
 }
-  
 ################################################################################
 
 ################################################################################
 ## Check compatibility between gridraster and glwd3_raster.                   ##
 cat("Check compatibility\n")
-if (any(res(gridraster) / res(glwd3_raster) < 0.9999)) {
-  ## source is too coarse
+if (any(terra::res(gridraster) / terra::res(glwd3_raster) < 0.9999)) {
+  ## Source is too coarse.
   stop(
-    "Source resolution ", paste(res(glwd3_raster), collapse = " by "),
+    "Source resolution ", paste(terra::res(glwd3_raster), collapse = " by "),
     " in ", sQuote(glwd3_name),
     " is coarser than target resolution ",
     paste(
@@ -273,8 +274,9 @@ if (any(res(gridraster) / res(glwd3_raster) < 0.9999)) {
     " of grid file ", sQuote(gridname)
   )
 }
-if (any((res(gridraster) / res(glwd3_raster)) %% 1 > 1e-4) &&
-  any((res(gridraster) / res(glwd3_raster)) %% 1 < (1 - 1e-4))
+if (
+  any((terra::res(gridraster) / terra::res(glwd3_raster)) %% 1 > 1e-4) &&
+    any((terra::res(gridraster) / terra::res(glwd3_raster)) %% 1 < (1 - 1e-4))
 ) {
   # Target is not integer multiple of source resolution.
   stop(
@@ -285,47 +287,53 @@ if (any((res(gridraster) / res(glwd3_raster)) %% 1 > 1e-4) &&
     ),
     " of grid file ", sQuote(gridname),
     " is not an integer multiple of source resolution ",
-    paste(res(glwd3_raster), collapse = " by "),
+    paste(terra::res(glwd3_raster), collapse = " by "),
     " in ", sQuote(glwd3_name)
   )
 }
 # Check spatial extent. Allow for small tolerance.
-if (xmin(gridraster) - xmin(glwd3_raster) < (-xres(glwd3_raster) / 100) ||
-  xmax(gridraster) - xmax(glwd3_raster) > xres(glwd3_raster) / 100 ||
-  ymin(gridraster) - ymin(glwd3_raster) < (-yres(glwd3_raster) / 100) ||
-  ymax(gridraster) - ymax(glwd3_raster) > yres(glwd3_raster) / 100
+if (
+  terra::xmin(gridraster) - terra::xmin(glwd3_raster) <
+    (-terra::xres(glwd3_raster) / 100) ||
+    terra::xmax(gridraster) - terra::xmax(glwd3_raster) >
+      terra::xres(glwd3_raster) / 100 ||
+    terra::ymin(gridraster) - terra::ymin(glwd3_raster) <
+      (-terra::yres(glwd3_raster) / 100) ||
+    terra::ymax(gridraster) - terra::ymax(glwd3_raster) >
+      terra::yres(glwd3_raster) / 100
 ) {
   stop(
-    "Spatial extent of source data ", toString(extent(glwd3_raster)),
+    "Spatial extent of source data ", toString(terra::ext(glwd3_raster)),
     " does not cover the full spatial extent ",
-    toString(extent(gridraster)),
+    toString(terra::ext(gridraster)),
     " of grid file ", sQuote(gridname)
   )
 }
 # Check cell boundary alignment.
-if ((
-    (abs(xmin(gridraster) - xmin(glwd3_raster)) / xres(glwd3_raster)) %% 1 >
-    1e-3 &&
-    (abs(xmin(gridraster) - xmin(glwd3_raster)) / xres(glwd3_raster)) %% 1 <
-    0.999
+if (
+  (
+    (abs(terra::xmin(gridraster) - terra::xmin(glwd3_raster)) /
+       terra::xres(glwd3_raster)) %% 1 > 1e-3 &&
+      (abs(terra::xmin(gridraster) - terra::xmin(glwd3_raster)) /
+         terra::xres(glwd3_raster)) %% 1 < 0.999
   ) || (
-    (abs(ymin(gridraster) - ymin(glwd3_raster)) / yres(glwd3_raster)) %% 1 >
-    1e-3 &&
-    (abs(ymin(gridraster) - ymin(glwd3_raster)) / yres(glwd3_raster)) %% 1 <
-    0.999
+    (abs(terra::ymin(gridraster) - terra::ymin(glwd3_raster)) /
+       terra::yres(glwd3_raster)) %% 1 > 1e-3 &&
+      (abs(terra::ymin(gridraster) - terra::ymin(glwd3_raster)) /
+         terra::yres(glwd3_raster)) %% 1 < 0.999
   )
 ) {
   stop(
-    "Spatial extent of source data ", toString(extent(glwd3_raster)),
+    "Spatial extent of source data ", toString(terra::ext(glwd3_raster)),
     " and spatial extent of grid file ", sQuote(gridname), " ",
-    toString(extent(gridraster)),
+    toString(terra::ext(gridraster)),
     " are mis-aligned."
   )
 } else {
   # Align extent to take care of numerical inaccuracies.
-  extent(gridraster) <- alignExtent(extent(gridraster), glwd3_raster)
+  terra::ext(gridraster) <- terra::align(terra::ext(gridraster), glwd3_raster)
 }
-aggregation_factor <- round(res(gridraster) / res(glwd3_raster), 4)
+aggregation_factor <- round(terra::res(gridraster) / terra::res(glwd3_raster), 4)
 if (any(aggregation_factor %% 1 != 0)) {
   stop(
     "Target resolution of grid file ", sQuote(gridname), " ",
@@ -334,22 +342,36 @@ if (any(aggregation_factor %% 1 != 0)) {
       collapse = " by "
     ),
     " is not an integer multiple of source resolution ",
-    paste(res(glwd3_raster), collapse = " by "),
+    paste(terra::res(glwd3_raster), collapse = " by "),
     " in ", sQuote(glwd3_name)
   )
 }
 # Crop glwd3_raster if it has larger extent than gridraster.
-glwd3_raster <- crop(glwd3_raster, gridraster)
+glwd3_raster <- terra::crop(glwd3_raster, gridraster)
 ################################################################################
 
 
 ################################################################################
 ## Derive matching raster of cell areas.                                      ##
-glwd_area <- raster(extent(glwd3_raster), resolution = res(glwd3_raster))
-values(glwd_area) <- rep(
-  cellarea(yFromRow(glwd3_raster), xres(glwd3_raster), yres(glwd3_raster)),
-  each = ncol(glwd3_raster)
+size <- lpjmlkit::calc_cellarea(
+  terra::yFromRow(glwd3_raster),
+  terra::xres(glwd3_raster),
+  terra::yres(glwd3_raster),
+  earth_radius = LandInG_setup$earthradius,
+  return_unit = "m2"
 )
+all_size <- rep(size, terra::ncol(glwd3_raster))
+dim(all_size) <- c(terra::nrow(glwd3_raster), terra::ncol(glwd3_raster))
+all_size <- t(all_size)
+dim(all_size) <- NULL
+gc(reset = TRUE)
+glwd_area <- terra::rast(
+  terra::ext(glwd3_raster),
+  resolution = terra::res(glwd3_raster),
+  crs = terra::crs(glwd3_raster),
+  vals = all_size
+)
+rm(all_size, size)
 ################################################################################
 
 ################################################################################
@@ -360,26 +382,31 @@ cat(
   "GLWD", ifelse(length(glwd3_classes) > 1, "types", "type"),
   toString(sQuote(names(glwd3_classes))),
   "from source resolution",
-  paste(format(res(glwd3_raster), digits = 4), collapse = " by "), "degree",
-  "to target resolution",
-  paste(format(res(gridraster), digits = 4), collapse = " by "),
+  paste(format(terra::res(glwd3_raster), digits = 4), collapse = " by "),
+  "degree to target resolution",
+  paste(format(terra::res(gridraster), digits = 4), collapse = " by "),
   "degree.\n"
 )
 for (type in names(glwd3_classes)) {
   cat("Processing", type, "\n")
   # Get area of cells that have the respective type
-  typearea <- mask(
-    mask(glwd_area, glwd3_raster),
+  typearea <- terra::mask(
+    terra::mask(glwd_area, glwd3_raster),
     glwd3_raster,
-    maskvalue = glwd3_classes[type],
+    maskvalues = glwd3_classes[type],
     inverse = TRUE
   )
   # Global sum before aggregation
-  typesum <- cellStats(typearea, sum)
+  typesum <- terra::global(typearea, "sum", na.rm = TRUE)
   # Aggregate to target resolution
-  typearea <- aggregate(typearea, fact = aggregation_factor, fun = sum)
+  typearea <- terra::aggregate(
+    typearea,
+    fact = rev(aggregation_factor), # res() returns lon/lat, fact is lat/lon
+    fun = "sum",
+    na.rm = TRUE
+  )
   # Check global sum after aggregation
-  if (abs(cellStats(typearea, sum) / typesum - 1) > 1e-8) {
+  if (abs(terra::global(typearea, "sum", na.rm = TRUE) / typesum - 1) > 1e-8) {
     stop(
       "Global sum after aggregation differs from global sum before aggregation."
     )
@@ -389,9 +416,12 @@ for (type in names(glwd3_classes)) {
 }
 # Convert absolute areas into cell fractions and extract values for all cells
 # in grid.
-grid_index <- cellFromXY(gridraster, griddata)
+grid_index <- terra::cellFromXY(gridraster, griddata)
 for (type in names(glwd3_classes)) {
-  lpj_type_frac <- get(paste0("lpj_", type, "_area"))[grid_index] / gridarea
+  lpj_type_frac <- unlist(
+    get(paste0("lpj_", type, "_area"))[grid_index] / gridarea,
+    use.names = FALSE
+  )
   lpj_type_frac[which(is.na(lpj_type_frac))] <- 0 # Cells without water bodies
   assign(paste0("lpj_", type, "_frac"), lpj_type_frac)
   rm(lpj_type_frac)
@@ -452,7 +482,7 @@ if (length(grep("lake|river", names(glwd3_classes), ignore.case = TRUE)) == 2) {
       datatype <- 3
       scalar <- 1
     }
-    outputheader <- create_header(
+    outputheader <- lpjmlkit::create_header(
       name = headername,
       version = ifelse(output_format == "RAW", 0, bintype),
       nyear = 1,
@@ -464,25 +494,25 @@ if (length(grep("lake|river", names(glwd3_classes), ignore.case = TRUE)) == 2) {
       datatype = datatype
     )
     if (output_format == "BIN") {
-      write_header(outputname, outputheader)
+      lpjmlkit::write_header(outputname, outputheader)
       outputfile <- file(outputname, "ab")
     } else {
       outputfile <- file(outputname, "wb")
     }
-    if (typeof(get_datatype(outputheader)$type) == "raw") {
+    if (typeof(lpjmlkit::get_datatype(outputheader)$type) == "raw") {
       writeBin(as.raw(round(lpj_lakes_and_river_frac / scalar)), outputfile)
-    } else if (typeof(get_datatype(outputheader)$type) == "integer") {
+    } else if (typeof(lpjmlkit::get_datatype(outputheader)$type) == "integer") {
       writeBin(
         as.integer(round(lpj_lakes_and_river_frac / scalar)),
         outputfile,
-        size = get_datatype(outputheader)$size,
+        size = lpjmlkit::get_datatype(outputheader)$size,
         endian = outputheader$endian
       )
-    } else if (typeof(get_datatype(outputheader)$type) == "double") {
+    } else if (typeof(lpjmlkit::get_datatype(outputheader)$type) == "double") {
       writeBin(
         as.double(lpj_lakes_and_river_frac / scalar),
         outputfile,
-        size = get_datatype(outputheader)$size,
+        size = lpjmlkit::get_datatype(outputheader)$size,
         endian = outputheader$endian
       )
     } else {
@@ -493,17 +523,26 @@ if (length(grep("lake|river", names(glwd3_classes), ignore.case = TRUE)) == 2) {
     }
     close(outputfile)
   } else {
-    # Assume output_format is a raster format supported by raster package.
-    outputraster <- raster(gridraster)
-    outputraster[cellFromXY(outputraster, griddata)] <- lpj_lakes_and_river_frac
-    # The following will fail if output_format is not supported by the raster
+    # Assume output_format is a raster format supported by terra package.
+    outputraster <- terra::rast(gridraster)
+    outputraster[terra::cellFromXY(outputraster, griddata)] <-
+      lpj_lakes_and_river_frac
+    # The following will fail if output_format is not supported by the terra
     # package.
-    writeRaster(
-      outputraster,
-      filename = outputname,
-      varname = "lakes_and_rivers_frac",
-      longname = "cell fraction covered by lakes and rivers"
-    )
+    if (grepl(".nc[0-9]*$", outputname)) {
+      terra::writeCDF(
+        outputraster,
+        filename = outputname,
+        varname = "lakes_and_rivers_frac",
+        longname = "cell fraction covered by lakes and rivers",
+        unit = "1"
+      )
+    } else {
+      terra::writeRaster(
+        outputraster,
+        filename = outputname
+      )
+    }
   }
 }
 # Save individual fractions covered by each GLWD3_class.
@@ -537,7 +576,7 @@ for (type in names(glwd3_classes)) {
       datatype <- 3
       scalar <- 1
     }
-    outputheader <- create_header(
+    outputheader <- lpjmlkit::create_header(
       name = headername,
       version = ifelse(output_format == "RAW", 0, bintype),
       nyear = 1,
@@ -549,25 +588,25 @@ for (type in names(glwd3_classes)) {
       datatype = datatype
     )
     if (output_format == "BIN") {
-      write_header(outputname, outputheader)
+      lpjmlkit::write_header(outputname, outputheader)
       outputfile <- file(outputname, "ab")
     } else {
       outputfile <- file(outputname, "wb")
     }
-    if (typeof(get_datatype(outputheader)$type) == "raw") {
+    if (typeof(lpjmlkit::get_datatype(outputheader)$type) == "raw") {
       writeBin(as.raw(round(lpj_type_frac / scalar)), outputfile)
-    } else if (typeof(get_datatype(outputheader)$type) == "integer") {
+    } else if (typeof(lpjmlkit::get_datatype(outputheader)$type) == "integer") {
       writeBin(
         as.integer(round(lpj_type_frac / scalar)),
         outputfile,
-        size = get_datatype(outputheader)$size,
+        size = lpjmlkit::get_datatype(outputheader)$size,
         endian = outputheader$endian
       )
-    } else if (typeof(get_datatype(outputheader)$type) == "double") {
+    } else if (typeof(lpjmlkit::get_datatype(outputheader)$type) == "double") {
       writeBin(
         as.double(lpj_type_frac / scalar),
         outputfile,
-        size = get_datatype(outputheader)$size,
+        size = lpjmlkit::get_datatype(outputheader)$size,
         endian = outputheader$endian
       )
     } else {
@@ -578,17 +617,25 @@ for (type in names(glwd3_classes)) {
     }
     close(outputfile)
   } else {
-    # Assume output_format is a raster format supported by raster package.
-    outputraster <- raster(gridraster)
-    outputraster[cellFromXY(outputraster, griddata)] <- lpj_type_frac
-    # The following will fail if output_format is not supported by the raster
+    # Assume output_format is a raster format supported by terra package.
+    outputraster <- terra::rast(gridraster)
+    outputraster[terra::cellFromXY(outputraster, griddata)] <- lpj_type_frac
+    # The following will fail if output_format is not supported by the terra
     # package.
-    writeRaster(
-      outputraster,
-      filename = outputname,
-      varname = paste0(type, "_frac"),
-      longname = paste("cell fraction covered by", type)
-    )
+    if (grepl(".nc[0-9]*$", outputname)) {
+      terra::writeCDF(
+        outputraster,
+        filename = outputname,
+        varname = paste0(type, "_frac"),
+        longname = paste("cell fraction covered by", type),
+        unit = "1"
+      )
+    } else {
+      terra::writeRaster(
+        outputraster,
+        filename = outputname
+      )
+    }
   }
 }
 ################################################################################

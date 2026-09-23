@@ -1,13 +1,13 @@
 #!/bin/bash
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=4
+#SBATCH --mem=26G
 #SBATCH --qos=short
 #SBATCH --export=ALL
 #SBATCH --account=lpjml
 #SBATCH --comment="lakes and rivers"
 #SBATCH --output=lakes_rivers_fraction_%j.out
 #SBATCH --error=lakes_rivers_fraction_%j.err
-#SBATCH --mail-type=END
+#SBATCH --mail-type=END,FAIL
 #SBATCH --job-name=lakes_rivers_fraction
 
 ################################################################################
@@ -20,13 +20,9 @@
 ################################################################################
 
 ulimit -c unlimited
-export I_MPI_PMI_LIBRARY=/p/system/slurm/lib/libpmi.so
+if [ -d /p/system/lenovo/ctt ]; then
+  # Load modules for PIK 2024 high-performance computer
+  source ../R_env_PIK.sh
+fi
 
-module load R/3.6.2
-module load intel/2018.1
-module load gdal/2.4.0
-module load proj4/5.2.0
-
-export R_LIBS=/p/projects/lpjml/R.3.6.2/library # must match with R module selected above
-
-srun --propagate R --no-save --file=lakes_rivers_fraction.R --silent --slave
+Rscript --vanilla lakes_rivers_fraction.R

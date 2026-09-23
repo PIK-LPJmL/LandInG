@@ -12,8 +12,8 @@
 ## These are slightly faster than functions logit and inv.logit included in   ##
 ## the "boot" package.                                                        ##
 logit_trans <- function(p) {
-  return(log(p / (1 - p)))
+  log(p / (1 - p))
 }
 logistic_trans <- function(x) {
-  return(1 / (1 + exp(-x)))
+  1 / (1 + exp(-x))
 }

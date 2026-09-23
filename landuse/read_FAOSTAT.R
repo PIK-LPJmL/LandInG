@@ -26,18 +26,18 @@ source("landuse_setup.R")
 
 
 ################################################################################
-## Unit conversion rules; name refers to origin, values refers to target unit ##
-## This uses unit conversion functionality of udunits2 package                ##
+## Unit conversion rules; name refers to origin, value refers to target unit. ##
+## This uses unit conversion functionality of units package.                  ##
 ## fao_yield_units, fao_production_units, fao_area_units defined in           ##
 ## landuse_setup.R.                                                           ##
 unit_conversion <- list(
-  "hg/ha" = fao_yield_units,
-  "tonnes" = fao_production_units,
-  "1000 ha" = fao_area_units
+  "hg/ha" = LandInG_setup$landuse$fao_yield_units,
+  "tonnes" = LandInG_setup$landuse$fao_production_units,
+  "1000 ha" = LandInG_setup$landuse$fao_area_units
 )
 # Check validity of unit conversion rules
 for (conv in names(unit_conversion)) {
-  if (!ud.are.convertible(conv, unit_conversion[[conv]])) {
+  if (!units::ud_are_convertible(conv, unit_conversion[[conv]])) {
     stop("Cannot convert [", conv, "] to [", unit_conversion[[conv]], "]")
   }
 }
@@ -56,49 +56,56 @@ landuse_vars <- c(
 
 ################################################################################
 ## Processing of production data                                              ##
-cat("Production data from", sQuote(fao_production_file), "\n")
+cat(
+  "Production data from",
+  sQuote(LandInG_setup$landuse$fao_production_file),
+  "\n"
+)
 cat(
   "Definitions and standards from",
   toString(
     sQuote(
-      c(fao_production_country_file, fao_production_country_group_file,
-        fao_production_item_file, fao_production_item_group_file)
+      c(LandInG_setup$landuse$fao_production_country_file,
+        LandInG_setup$landuse$fao_production_country_group_file,
+        LandInG_setup$landuse$fao_production_item_file,
+        LandInG_setup$landuse$fao_production_item_group_file
+      )
     )
   ),
   "\n"
 )
 
-production_data <- fread(
-  fao_production_file,
+production_data <- data.table::fread(
+  LandInG_setup$landuse$fao_production_file,
   check.names = TRUE,
   data.table = FALSE,
   header = TRUE
 )
-fao_production_country_def <- fread(
-  fao_production_country_file,
+fao_production_country_def <- data.table::fread(
+  LandInG_setup$landuse$fao_production_country_file,
   na.strings = "...",
   # country code for Namibia is "NA", which would normally be converted into NA
   check.names = TRUE,
   data.table = FALSE,
   header = TRUE
 )
-fao_production_country_group_def <- fread(
-  fao_production_country_group_file,
+fao_production_country_group_def <- data.table::fread(
+  LandInG_setup$landuse$fao_production_country_group_file,
   na.strings = "...",
   # country code for Namibia is "NA", which would normally be converted into NA
   check.names = TRUE,
   data.table = FALSE,
   header = TRUE
 )
-fao_production_item_def <- fread(
-  fao_production_item_file,
+fao_production_item_def <- data.table::fread(
+  LandInG_setup$landuse$fao_production_item_file,
   na.strings = "...",
   check.names = TRUE,
   data.table = FALSE,
   header = TRUE
 )
-fao_production_item_group_def <- fread(
-  fao_production_item_group_file,
+fao_production_item_group_def <- data.table::fread(
+  LandInG_setup$landuse$fao_production_item_group_file,
   na.strings = "...",
   check.names = TRUE,
   data.table = FALSE,
@@ -116,16 +123,16 @@ for (table in c(
   table_data <- get(table)
   for (c in colnames(table_data)) {
     if (typeof(table_data[, c]) == "character") {
-      if (!all(stri_enc_isascii(table_data[, c]), na.rm = TRUE)) {
+      if (!all(stringi::stri_enc_isascii(table_data[, c]), na.rm = TRUE)) {
         # String has non-ASCII characters
-        if (!all(stri_enc_isutf8(table_data[, c]), na.rm = TRUE)) {
+        if (!all(stringi::stri_enc_isutf8(table_data[, c]), na.rm = TRUE)) {
           # String has non-UTF8 characters -> assume windows-1252 encoding and
           # convert to UTF-8
           message(
             "Converting column ", sQuote(c),
             " from windows-1252 to UTF-8 encoding in ", table
           )
-          table_data[, c] <- stri_encode(
+          table_data[, c] <- stringi::stri_encode(
             table_data[, c],
             "windows-1252",
             "UTF-8"
@@ -137,8 +144,15 @@ for (table in c(
           "Converting column ", sQuote(c),
           " from UTF-8 to ASCII encoding in ", table
         )
-        table_data[, c] <- stri_encode(table_data[, c], "UTF-8", "UTF-8")
-        table_data[, c] <- stri_trans_general(table_data[, c], "latin-ascii")
+        table_data[, c] <- stringi::stri_encode(
+          table_data[, c],
+          "UTF-8",
+          "UTF-8"
+        )
+        table_data[, c] <- stringi::stri_trans_general(
+          table_data[, c],
+          "latin-ascii"
+        )
       }
     }
   }
@@ -164,7 +178,7 @@ colnames(production_items) <- c("CODE", "NAME")
 # FAOSTAT have recently changed their data domains and merged crop and
 # livestock data. If fao_production_file_includes_livestock is set to TRUE in
 # landuse_setup.R, try to filter only crop data.
-if (fao_production_file_includes_livestock) {
+if (LandInG_setup$landuse$fao_production_file_includes_livestock) {
   cat(
     "** Note: You have selected that your FAOSTAT production data includes",
     "livestock data. **\n"
@@ -192,25 +206,27 @@ if (fao_production_file_includes_livestock) {
     ignore.case = TRUE
   )
   # Non-crops
-  remove <- which(!production_items$CODE %in%
-    fao_production_item_group_def$Item.Code[index]
+  remove <- which(
+    !production_items$CODE %in% fao_production_item_group_def$Item.Code[index]
   )
   # Crops
-  keep <- which(production_items$CODE %in%
-    fao_production_item_group_def$Item.Code[index]
+  keep <- which(
+    production_items$CODE %in% fao_production_item_group_def$Item.Code[index]
   )
   cat("** Data for", length(remove), "items removed **\n")
   production_items <- production_items[keep, ]
   # Adjust production_data to updated production_items
   keep2 <- which(production_data$Item.Code %in% production_items$CODE)
   production_data <- production_data[keep2, ]
-} else if (any(
-  grepl(
-    "meat|animal|milk",
-    fao_production_item_group_def$Item.Group,
-    ignore.case = TRUE
+} else if (
+  any(
+    grepl(
+      "meat|animal|milk",
+      fao_production_item_group_def$Item.Group,
+      ignore.case = TRUE
+    )
   )
-)) {
+) {
   warning(
     "** You have selected that your FAOSTAT production data does ",
     "not include livestock data, but the following item groups have been ",
@@ -236,17 +252,16 @@ if (fao_production_file_includes_livestock) {
 production_elements <- unique(production_data[, c("Element.Code", "Element")])
 colnames(production_elements) <- c("CODE", "NAME")
 
-options(useFancyQuotes = FALSE, width = 200)
 # Check if country names in production_data match country lists
-print("Checking naming consistency")
+cat("Checking naming consistency\n")
 # Missing codes
-index <- which(!production_countries$CODE %in%
-  fao_production_country_def$Country.Code
+index <- which(
+  !production_countries$CODE %in% fao_production_country_def$Country.Code
 )
 if (length(index) > 0) {
   warning(
     "production_data includes countries not found in ",
-    sQuote(fao_production_country_file), ": ",
+    sQuote(LandInG_setup$landuse$fao_production_country_file), ": ",
     toString(sQuote(production_countries$NAME[index])),
     call. = FALSE,
     immediate. = TRUE
@@ -263,7 +278,7 @@ if (any(production_countries$NAME != newnames)) {
   cat(
     "The following", length(mismatch),
     "country names do not match between production_data and",
-    sQuote(fao_production_country_file), "\n"
+    sQuote(LandInG_setup$landuse$fao_production_country_file), "\n"
   )
   print(
     cbind(
@@ -281,14 +296,15 @@ if (any(production_countries$NAME != newnames)) {
 # Check country group names with respective definitions file
 # Country groups have code > 1000
 # Missing codes
-index <- which(production_countries$CODE > 1000 &
-  !production_countries$CODE %in%
-  fao_production_country_group_def$Country.Group.Code
+index <- which(
+  production_countries$CODE > 1000 &
+    !production_countries$CODE %in%
+      fao_production_country_group_def$Country.Group.Code
 )
 if (length(index) > 0) {
   warning(
     "production_data includes country groups not found in ",
-    sQuote(fao_production_country_group_file), ": ",
+    sQuote(LandInG_setup$landuse$fao_production_country_group_file), ": ",
     toString(sQuote(production_countries$NAME[index])),
     call. = FALSE,
     immediate. = TRUE
@@ -306,7 +322,7 @@ if (any(production_countries$NAME[groupids] != newnames)) {
   cat(
     "The following", length(mismatch),
     "country names do not match between production_data and",
-    sQuote(fao_production_country_group_file), "\n"
+    sQuote(LandInG_setup$landuse$fao_production_country_group_file), "\n"
   )
   print(
     cbind(
@@ -330,7 +346,7 @@ mismatch <- which(!production_items$CODE %in% fao_production_item_def$Item.Code)
 if (length(mismatch) > 0) {
   warning(
     "production_data includes items not found in ",
-    sQuote(fao_production_item_file), ": ",
+    sQuote(LandInG_setup$landuse$fao_production_item_file), ": ",
     toString(sQuote(production_items$NAME[mismatch])),
     call. = FALSE,
     immediate. = TRUE
@@ -344,7 +360,7 @@ if (length(mismatch) > 0) {
   cat(
     "The following", length(mismatch),
     "item names do not match between production_data and",
-    sQuote(fao_production_item_file), "\n"
+    sQuote(LandInG_setup$landuse$fao_production_item_file), "\n"
   )
   print(
     cbind(
@@ -363,12 +379,12 @@ if (length(mismatch) > 0) {
 # Item groups have code > 1000
 # Missing code
 index <- which(production_items$CODE > 1000 &
-  !production_items$CODE %in% fao_production_item_group_def$Item.Group.Code
+    !production_items$CODE %in% fao_production_item_group_def$Item.Group.Code
 )
 if (length(index) > 0) {
   warning(
     "production_data includes item groups not found in ",
-    sQuote(fao_production_item_group_file), ": ",
+    sQuote(LandInG_setup$landuse$fao_production_item_group_file), ": ",
     toString(sQuote(production_items$NAME[index])),
     call. = FALSE,
     immediate. = TRUE
@@ -386,7 +402,7 @@ if (length(mismatch) > 0) {
   cat(
     "The following", length(mismatch),
     "item names do not match between production_data and",
-    sQuote(fao_production_item_group_file), "\n"
+    sQuote(LandInG_setup$landuse$fao_production_item_group_file), "\n"
   )
   print(
     cbind(
@@ -416,7 +432,7 @@ if (length(mismatch) > 0) {
   cat(
     "The following", length(mismatch),
     "item names do not match between production_data and",
-    sQuote(fao_production_item_group_file), "\n"
+    sQuote(LandInG_setup$landuse$fao_production_item_group_file), "\n"
   )
   print(
     cbind(
@@ -432,26 +448,26 @@ if (length(mismatch) > 0) {
   }
 }
 
-# Convert data into array with dimensions country, item, element, years
+# Convert data into array with dimensions country, item, element, time
 production_array <- array(
   dim = c(
-    nrow(production_countries),
-    nrow(production_items),
-    nrow(production_elements),
-    length(production_years)
+    country = nrow(production_countries),
+    item = nrow(production_items),
+    element = nrow(production_elements),
+    time = length(production_years)
   ),
   dimnames = list(
-    production_countries$NAME,
-    production_items$NAME,
-    production_elements$NAME,
-    format(production_years, scientific = FALSE)
+    country = production_countries$NAME,
+    item = production_items$NAME,
+    element = production_elements$NAME,
+    time = format(production_years, scientific = FALSE)
   )
 )
 conv_msg <- list() # dummy variable keeping track of unit conversion messages
 cat(
   "Parsing FAO production data for",
-  dim(production_array)[1], "countries/country groups from",
-  sQuote(fao_production_file), "\n"
+  dim(production_array)["country"], "countries/country groups from",
+  sQuote(LandInG_setup$landuse$fao_production_file), "\n"
 )
 for (country in production_countries$NAME) {
   country_data <- production_data[which(production_data$Area == country), ]
@@ -469,7 +485,8 @@ for (country in production_countries$NAME) {
         )
       }
       if (item_data[index, "Unit"] %in% names(unit_conversion)) {
-        conv_factor <- ud.convert(1,
+        conv_factor <- units::ud_convert(
+          1,
           item_data[index, "Unit"],
           unit_conversion[[item_data[index, "Unit"]]]
         )
@@ -485,17 +502,24 @@ for (country in production_countries$NAME) {
         conv_factor <- 1
       }
       if (grepl("harvested", element, ignore.case = TRUE)) {
-        if (ud.convert(1, item_data[index, "Unit"], fao_area_units) != 1 &&
-          is.null(conv_msg[[element]])
+        if (
+          units::ud_convert(
+            1,
+            item_data[index, "Unit"],
+            LandInG_setup$landuse$fao_area_units
+          ) != 1 &&
+            is.null(conv_msg[[element]])
         ) {
           warning(
             "Unit of element ", sQuote(element),
             " [", item_data[index, "Unit"], "] ",
-            "differs from defined fao_area_units [", fao_area_units, "]. ",
+            "differs from defined fao_area_units [",
+            LandInG_setup$landuse$fao_area_units, "]. ",
             "All further processing scripts expect harvested areas to be in",
-            " [", fao_area_units, "].\n",
+            " [", LandInG_setup$landuse$fao_area_units, "].\n",
             "Please add conversion rule from",
-            " [", item_data[index, "Unit"], "] to [", fao_area_units, "].",
+            " [", item_data[index, "Unit"], "] to [",
+            LandInG_setup$landuse$fao_area_units, "].",
             call. = FALSE,
             immediate. = TRUE
           )
@@ -512,28 +536,34 @@ for (country in production_countries$NAME) {
 
 ################################################################################
 ## Processing of landuse data                                                 ##
-cat("Landuse data from", sQuote(fao_landuse_file), "\n")
+cat("Landuse data from", sQuote(LandInG_setup$landuse$fao_landuse_file), "\n")
 cat(
   "Definitions and standards from",
-  toString(sQuote(c(fao_landuse_country_file, fao_landuse_country_group_file))),
+  toString(
+    sQuote(
+      c(LandInG_setup$landuse$fao_landuse_country_file,
+        LandInG_setup$landuse$fao_landuse_country_group_file
+      )
+    )
+  ),
   "\n"
 )
-landuse_data <- fread(
-  fao_landuse_file,
+landuse_data <- data.table::fread(
+  LandInG_setup$landuse$fao_landuse_file,
   check.names = TRUE,
   data.table = FALSE,
   header = TRUE
 )
-fao_landuse_country_def <- fread(
-  fao_landuse_country_file,
+fao_landuse_country_def <- data.table::fread(
+  LandInG_setup$landuse$fao_landuse_country_file,
   na.strings = "...",
   # country code for Namibia is "NA", which would normally be converted into NA
   check.names = TRUE,
   data.table = FALSE,
   header = TRUE
 )
-fao_landuse_country_group_def <- fread(
-  fao_landuse_country_group_file,
+fao_landuse_country_group_def <- data.table::fread(
+  LandInG_setup$landuse$fao_landuse_country_group_file,
   na.strings = "...",
   # country code for Namibia is "NA", which would normally be converted into NA
   check.names = TRUE,
@@ -549,16 +579,16 @@ for (table in c(
   table_data <- get(table)
   for (c in colnames(table_data)) {
     if (typeof(table_data[, c]) == "character") {
-      if (!all(stri_enc_isascii(table_data[, c]), na.rm = TRUE)) {
+      if (!all(stringi::stri_enc_isascii(table_data[, c]), na.rm = TRUE)) {
         # String has non-ASCII characters
-        if (!all(stri_enc_isutf8(table_data[, c]), na.rm = TRUE)) {
+        if (!all(stringi::stri_enc_isutf8(table_data[, c]), na.rm = TRUE)) {
           # String has non-UTF8 characters -> assume windows-1252 encoding and
           # convert to UTF-8
           message(
             "Converting column ", sQuote(c),
             " from windows-1252 to UTF-8 encoding in ", table
           )
-          table_data[, c] <- stri_encode(
+          table_data[, c] <- stringi::stri_encode(
             table_data[, c],
             "windows-1252",
             "UTF-8"
@@ -570,8 +600,15 @@ for (table in c(
           "Converting column ", sQuote(c),
           " from UTF-8 to ASCII encoding in ", table
         )
-        table_data[, c] <- stri_encode(table_data[, c], "UTF-8", "UTF-8")
-        table_data[, c] <- stri_trans_general(table_data[, c], "latin-ascii")
+        table_data[, c] <- stringi::stri_encode(
+          table_data[, c],
+          "UTF-8",
+          "UTF-8"
+        )
+        table_data[, c] <- stringi::stri_trans_general(
+          table_data[, c],
+          "latin-ascii"
+        )
       }
     }
   }
@@ -611,13 +648,13 @@ landuse_elements <- unique(landuse_data[index, c("Element.Code", "Element")])
 colnames(landuse_elements) <- c("CODE", "NAME")
 
 # Check if country names in landuse_data match country lists
-mismatch <- which(!landuse_countries$CODE %in%
-  fao_landuse_country_def$Country.Code
+mismatch <- which(
+  !landuse_countries$CODE %in% fao_landuse_country_def$Country.Code
 )
 if (length(mismatch) > 0) {
   warning(
     "landuse_data includes countries not found in ",
-    sQuote(fao_landuse_country_file), ": ",
+    sQuote(LandInG_setup$landuse$fao_landuse_country_file), ": ",
     toString(sQuote(landuse_countries$NAME[mismatch])), ".",
     call. = FALSE,
     immediate. = TRUE
@@ -627,8 +664,9 @@ if (length(mismatch) > 0) {
     "Removing data to avoid problems in further processing. ",
     "Otherwise, update metadata."
   )
-  rem <- which(!landuse_data$Area.Code %in%
-    fao_landuse_country_def$Country.Code)
+  rem <- which(
+    !landuse_data$Area.Code %in% fao_landuse_country_def$Country.Code
+  )
   landuse_data <- landuse_data[-rem, ]
   landuse_countries <- landuse_countries[-mismatch, ]
 }
@@ -639,7 +677,7 @@ if (length(mismatch) > 0) {
   cat(
     "The following", length(mismatch),
     "country names do not match between landuse_data and",
-    sQuote(fao_landuse_country_file), "\n"
+    sQuote(LandInG_setup$landuse$fao_landuse_country_file), "\n"
   )
   print(
     cbind(
@@ -656,13 +694,13 @@ if (length(mismatch) > 0) {
 }
 # Check if country names in landuse_data match country group lists
 mismatch <- which(
-  landuse_countries$CODE > 1000 &
-  !landuse_countries$CODE %in% fao_landuse_country_group_def$Country.Group.Code
+  landuse_countries$CODE > 1000 & !landuse_countries$CODE %in%
+    fao_landuse_country_group_def$Country.Group.Code
 )
 if (length(mismatch) > 0) {
   warning(
     "landuse_data includes country groups not found in ",
-    sQuote(fao_landuse_country_group_file), ": ",
+    sQuote(LandInG_setup$landuse$fao_landuse_country_group_file), ": ",
     toString(sQuote(landuse_countries$NAME[mismatch])),
     call. = FALSE,
     immediate. = TRUE
@@ -679,7 +717,7 @@ if (length(mismatch) > 0) {
   cat(
     "The following", length(mismatch),
     "country names do not match between landuse_data and",
-    sQuote(fao_landuse_country_file), "\n"
+    sQuote(LandInG_setup$landuse$fao_landuse_country_file), "\n"
   )
   print(
     cbind(
@@ -755,26 +793,26 @@ if (length(mismatch) > 0) {
     }
   }
 }
-# Convert data into array with dimensions country, item, element, years
+# Convert data into array with dimensions country, item, element, time
 landuse_array <- array(
   dim = c(
-    nrow(landuse_countries),
-    nrow(landuse_items),
-    nrow(landuse_elements),
-    length(landuse_years)
+    country = nrow(landuse_countries),
+    item = nrow(landuse_items),
+    element = nrow(landuse_elements),
+    time = length(landuse_years)
   ),
   dimnames = list(
-    landuse_countries$NAME,
-    landuse_items$NAME,
-    landuse_elements$NAME,
-    format(landuse_years, scientific = FALSE)
+    country = landuse_countries$NAME,
+    item = landuse_items$NAME,
+    element = landuse_elements$NAME,
+    time = format(landuse_years, scientific = FALSE)
   )
 )
 conv_msg <- list() # dummy variable keeping track of unit conversion messages
 cat(
-  "Parsing FAO landuse data for", dim(landuse_array)[1],
+  "Parsing FAO landuse data for", dim(landuse_array)["country"],
   "countries/country groups from",
-  fao_landuse_file, "\n"
+  LandInG_setup$landuse$fao_landuse_file, "\n"
 )
 for (country in landuse_countries$NAME) {
   country_data <- landuse_data[which(landuse_data$Area == country), ]
@@ -792,7 +830,7 @@ for (country in landuse_countries$NAME) {
         )
       }
       if (item_data[index, "Unit"] %in% names(unit_conversion)) {
-        conv_factor <- ud.convert(1,
+        conv_factor <- units::ud_convert(1,
           item_data[index, "Unit"],
           unit_conversion[[item_data[index, "Unit"]]]
         )
@@ -819,20 +857,29 @@ for (country in landuse_countries$NAME) {
 ## Save data to RData files for use in other scripts.                         ##
 cat(
   "Outputs saved to",
-  toString(sQuote(c(fao_production_RData, fao_landuse_RData))), "\n"
+  toString(
+    sQuote(
+      c(LandInG_setup$landuse$fao_production_RData,
+        LandInG_setup$landuse$fao_landuse_RData
+      )
+    )
+  ), "\n"
 )
+LandInG_version <- LandInG_setup$LandInG_version
 save(
   production_countries,
   production_items,
   production_elements,
   production_array,
-  file = fao_production_RData
+  LandInG_version,
+  file = LandInG_setup$landuse$fao_production_RData
 )
 save(
   landuse_countries,
   landuse_items,
   landuse_elements,
   landuse_array,
-  file = fao_landuse_RData
+  LandInG_version,
+  file = LandInG_setup$landuse$fao_landuse_RData
 )
 ################################################################################

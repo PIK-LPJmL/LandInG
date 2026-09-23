@@ -15,10 +15,9 @@
 ## Settings:                                                                  ##
 ## TYPE: "lu" for land use data; HYDE also contains population density data   ##
 ##       which can be interpolated and merged by setting TYPE to "pop"        ##
-## STARTYEAR: first year of data to merge (HYDE data currently cover 10000    ##
-##            BC to 2017. Data are centennial until 1700, decadal from 1700-  ##
-##            2000 and annual after 2000). Must be equal to value in step 2   ##
-##            script.                                                         ##
+## STARTYEAR: first year of data to merge (HYDE data currently cover 10000 BC ##
+##            to 2017. Data are centennial until 1700, decadal from 1700-2000 ##
+##            and annual after 2000). Must be equal to value in step 2 script ##
 ## LASTYEAR: last year of data to merge.                                      ##
 ## VARS: vector of HYDE variables that should be merged.                      ##
 ## NCDIR: directory where NetCDF files were created in step 2 script.         ##
@@ -27,13 +26,17 @@
 ##   filenames to denote different HYDE versions (compare                     ##
 ##   'hyde_version_string' setting in ../landuse_setup.R)                     ##
 ## SPLIT_YEAR_ANNUAL: last year where HYDE source data are not annual (used   ##
-##                    for interpolation target, 2000 for HYDE 3.2.1)          ##
+##                    for interpolation target, 2000 for HYDE 3.2)            ##
 ################################################################################
 
 TYPE="lu" # pop"
 STARTYEAR=1500
 LASTYEAR=2017
-VARS="cropland grazing tot_irri tot_rainfed "
+if [[ "$TYPE" == "lu" ]]; then
+  VARS="cropland grazing tot_irri tot_rainfed "
+else
+  VARS="uopp" # built-up area
+fi
 NCDIR="ncdf_tmp"
 HYDE_VERSION_STRING=""
 SPLIT_YEAR_ANNUAL=2000
@@ -72,6 +75,8 @@ for VAR in $VARS;do
       cdo -s -z zip -selyear,$(($SPLIT_YEAR_ANNUAL+1))/${LASTYEAR} \
           $ODIR/${VAR}_${STARTYEAR}_${LASTYEAR}.nc4 \
           $ODIR/${VAR}_annual_$(($SPLIT_YEAR_ANNUAL+1))_${LASTYEAR}.nc4
+      # Set units attribute to "km2". Note: this is only correct for variables
+      # describing areas, not for population variables.
       ncatted -O -h -a units,$VAR,o,c,"km2" \
           $ODIR/${VAR}_annual_$(($SPLIT_YEAR_ANNUAL+1))_${LASTYEAR}.nc4
     done

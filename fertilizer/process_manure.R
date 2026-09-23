@@ -33,17 +33,25 @@ missval_float <- 1e20
 ################################################################################
 ## Determine source file characteristics and required conversion.             ##
 ## Carry out conversion and save file to resolution-specific working directory##
-for (nut in manure_nutrients) {
+for (nut in LandInG_setup$fertilizer$manure_nutrients) {
   # Detect available file(s).
   # Note: By default, manure is only available for nitrogen, and manure_*
   # parameters in fertilizer_setup.R all refer to nitrogen. However, this script
   # technically supports setting values per nutrient by giving named vectors as
   # manure_* settings.
   search_dir <- dirname(
-    ifelse(length(manure_src_name) > 1, manure_src_name[nut], manure_src_name)
+    ifelse(
+      length(LandInG_setup$fertilizer$manure_src_name) > 1,
+      LandInG_setup$fertilizer$manure_src_name[nut],
+      LandInG_setup$fertilizer$manure_src_name
+    )
   )
   name_pattern <- basename(
-    ifelse(length(manure_src_name) > 1, manure_src_name[nut], manure_src_name)
+    ifelse(
+      length(LandInG_setup$fertilizer$manure_src_name) > 1,
+      LandInG_setup$fertilizer$manure_src_name[nut],
+      LandInG_setup$fertilizer$manure_src_name
+    )
   )
   src_filename <- list.files(
     search_dir,
@@ -52,19 +60,17 @@ for (nut in manure_nutrients) {
   )
   if (length(src_filename) == 0) {
     stop(
-      paste0(
-        "Cannot detect source file for nutrient ", sQuote(nut),
-        ". Used search pattern: ",
-        sQuote(
-          gsub(
-            "\\", "\\\\",
-            ifelse(
-              length(manure_src_name) > 1,
-              manure_src_name[nut],
-              manure_src_name
-            ),
-            fixed = TRUE
-          )
+      "Cannot detect source file for nutrient ", sQuote(nut),
+      ". Used search pattern: ",
+      sQuote(
+        gsub(
+          "\\", "\\\\",
+          ifelse(
+            length(LandInG_setup$fertilizer$manure_src_name) > 1,
+            LandInG_setup$fertilizer$manure_src_name[nut],
+            LandInG_setup$fertilizer$manure_src_name
+          ),
+          fixed = TRUE
         )
       )
     )
@@ -77,9 +83,9 @@ for (nut in manure_nutrients) {
         gsub(
           "\\", "\\\\",
           ifelse(
-            length(manure_src_name) > 1,
-            manure_src_name[nut],
-            manure_src_name
+            length(LandInG_setup$fertilizer$manure_src_name) > 1,
+            LandInG_setup$fertilizer$manure_src_name[nut],
+            LandInG_setup$fertilizer$manure_src_name
           ),
           fixed = TRUE
         )
@@ -90,42 +96,41 @@ for (nut in manure_nutrients) {
     )
   }
   # Is reference area specified?
-  nut_is_rate <- !is.null(manure_ref_area) &&
-    (length(manure_ref_area) == 1 && is.null(names(manure_ref_area)) ||
-    nut %in% names(manure_ref_area))
+  nut_is_rate <- !is.null(LandInG_setup$fertilizer$manure_ref_area) &&
+    (length(LandInG_setup$fertilizer$manure_ref_area) == 1 &&
+       is.null(names(LandInG_setup$fertilizer$manure_ref_area)) ||
+       nut %in% names(LandInG_setup$fertilizer$manure_ref_area))
   # Confirm that unit is absolute amount if manure is not a rate
   nut_src_unit <- ifelse(
-    length(manure_src_unit) > 1, manure_src_unit[nut], manure_src_unit
+    length(LandInG_setup$fertilizer$manure_src_unit) > 1,
+    LandInG_setup$fertilizer$manure_src_unit[nut],
+    LandInG_setup$fertilizer$manure_src_unit
   )
-  if (!nut_is_rate && !ud.are.convertible(nut_src_unit, "kg")) {
+  if (!nut_is_rate && !units::ud_are_convertible(nut_src_unit, "kg")) {
     stop(
-      paste(
-        "You have set manure_ref_area to NULL, which suggests that manure data",
-        "represents total amount. However, cannot recognize manure_src_unit",
-        sQuote(nut_src_unit), "as a unit specifying total mass."
-      )
+      "You have set manure_ref_area to NULL, which suggests that manure data ",
+      "represents total amount. However, cannot recognize manure_src_unit ",
+      sQuote(nut_src_unit), " as a unit specifying total mass."
     )
   }
   # Confirm that manure_src_unit can be converted into manure_rate_unit if
   # manure is given as a rate.
   nut_rate_unit <- ifelse(
-    length(manure_rate_unit) > 1, manure_rate_unit[nut], manure_rate_unit
+    length(LandInG_setup$fertilizer$manure_rate_unit) > 1,
+    LandInG_setup$fertilizer$manure_rate_unit[nut],
+    LandInG_setup$fertilizer$manure_rate_unit
   )
-  if (nut_is_rate && !ud.are.convertible(nut_src_unit, nut_rate_unit)) {
+  if (nut_is_rate && !units::ud_are_convertible(nut_src_unit, nut_rate_unit)) {
     stop(
-      paste(
-        "Cannot convert manure_src_unit", sQuote(nut_src_unit),
-        "into manure_rate_unit", sQuote(nut_rate_unit)
-      )
+      "Cannot convert manure_src_unit ", sQuote(nut_src_unit),
+      " into manure_rate_unit ", sQuote(nut_rate_unit)
     )
   }
   # Confirm that manure_rate_unit is actually a mass per area rate.
-  if (!ud.are.convertible(nut_rate_unit, "g/m2")) {
+  if (!units::ud_are_convertible(nut_rate_unit, "g/m2")) {
     stop(
-      paste(
-        "Provided manure_rate_unit", sQuote(nut_rate_unit),
-        "does not seem to be a valid mass per unit area."
-      )
+      "Provided manure_rate_unit ", sQuote(nut_rate_unit),
+      " does not seem to be a valid mass per unit area."
     )
   }
   # Derive mass component of manure_src_unit
@@ -153,20 +158,16 @@ for (nut in manure_nutrients) {
       )
     )
   )
-  if (!ud.are.convertible(nut_src_mass_unit, "kg")) {
+  if (!units::ud_are_convertible(nut_src_mass_unit, "kg")) {
     stop(
-      paste(
-        "Cannot detect unit specifying mass in manure_src_unit",
-        sQuote(nut_src_unit)
-      )
+      "Cannot detect unit specifying mass in manure_src_unit ",
+      sQuote(nut_src_unit)
     )
   }
-  if (!ud.are.convertible(nut_output_mass_unit, "kg")) {
+  if (!units::ud_are_convertible(nut_output_mass_unit, "kg")) {
     stop(
-      paste(
-        "Cannot detect unit specifying mass in manure_rate_unit",
-        sQuote(nut_rate_unit)
-      )
+      "Cannot detect unit specifying mass in manure_rate_unit ",
+      sQuote(nut_rate_unit)
     )
   }
   if (nut_is_rate) {
@@ -205,32 +206,41 @@ for (nut in manure_nutrients) {
     )
   }
   # Area reference. "grid" or "cropland" if nut_is_rate.
-  nut_ref_area <- ifelse(
-    is.null(manure_ref_area),
-    NULL,
-    ifelse(
-      is.null(names(manure_ref_area)) && length(manure_ref_area) == 1,
-      manure_ref_area,
-      ifelse(nut %in% names(manure_ref_area), manure_ref_area[nut], NULL)
-    )
-  )
+  if (!is.null(LandInG_setup$fertilizer$manure_ref_area)) {
+    if (is.null(names(LandInG_setup$fertilizer$manure_ref_area)) &&
+        length(LandInG_setup$fertilizer$manure_ref_area) == 1) {
+      nut_ref_area <- LandInG_setup$fertilizer$manure_ref_area
+    } else if (nut %in% names(LandInG_setup$fertilizer$manure_ref_area)) {
+      nut_ref_area <- LandInG_setup$fertilizer$manure_ref_area[nut]
+    } else {
+      nut_ref_area <- NULL
+    }
+  } else {
+    nut_ref_area <- NULL
+  }
   # Optional maximum application rate.
   nut_threshold <- ifelse(
-    is.null(manure_threshold),
+    is.null(LandInG_setup$fertilizer$manure_threshold),
     Inf,
     ifelse(
-      is.null(names(manure_threshold)) && length(manure_threshold) == 1,
-      manure_threshold,
-      ifelse(nut %in% names(manure_threshold), manure_threshold[nut], Inf)
+      is.null(names(LandInG_setup$fertilizer$manure_threshold)) &&
+        length(LandInG_setup$fertilizer$manure_threshold) == 1,
+      LandInG_setup$fertilizer$manure_threshold,
+      ifelse(
+        nut %in% names(LandInG_setup$fertilizer$manure_threshold),
+        LandInG_setup$fertilizer$manure_threshold[nut],
+        Inf
+      )
     )
   )
   nut_threshold_res <- ifelse(
-    is.null(names(manure_threshold_res)) && length(manure_threshold_res) == 1,
-    manure_threshold_res,
+    is.null(names(LandInG_setup$fertilizer$manure_threshold_res)) &&
+      length(LandInG_setup$fertilizer$manure_threshold_res) == 1,
+    LandInG_setup$fertilizer$manure_threshold_res,
     ifelse(
-      nut %in% names(manure_threshold_res),
-      manure_threshold_res[nut],
-      stop(paste0("Missing setting manure_threshold_res[", dQuote(nut), "]"))
+      nut %in% names(LandInG_setup$fertilizer$manure_threshold_res),
+      LandInG_setup$fertilizer$manure_threshold_res[nut],
+      stop("Missing setting manure_threshold_res[", dQuote(nut), "]")
     )
   )
   if (is.finite(nut_threshold) && nut_threshold_res == "source") {
@@ -240,53 +250,47 @@ for (nut in manure_nutrients) {
     )
   }
   if ((!is.null(nut_ref_area) && nut_ref_area == "grid") || !nut_is_rate ||
-    (is.finite(nut_threshold) && nut_threshold_res == "source")
+      (is.finite(nut_threshold) && nut_threshold_res == "source")
   ) {
     # Need cropland dataset to scale manure rates referring to full grid area to
     # cropland area, or to scale absolute amounts to rate per cropland area.
-    nut_cropland_name <- ifelse(
-      is.null(manure_cropland_name),
-      NULL,
-      ifelse(
-        is.null(names(manure_cropland_name)) &&
-          length(manure_cropland_name) == 1,
-        manure_cropland_name,
-        ifelse(
-          nut %in% names(manure_cropland_name),
-          manure_cropland_name[nut],
-          NULL
-        )
-      )
-    )
+    if (!is.null(LandInG_setup$fertilizer$manure_cropland_name)) {
+      if (is.null(names(LandInG_setup$fertilizer$manure_cropland_name)) &&
+          length(LandInG_setup$fertilizer$manure_cropland_name) == 1) {
+        nut_cropland_name <- LandInG_setup$fertilizer$manure_cropland_name
+      } else if (nut %in% names(LandInG_setup$fertilizer$manure_cropland_name)) {
+        nut_cropland_name <- LandInG_setup$fertilizer$manure_cropland_name[nut]
+      } else {
+        nut_cropland_name <- NULL
+      }
+    } else {
+      nut_cropland_name <- NULL
+    }
     nut_cropland_varname <- ifelse(
-      is.null(names(manure_cropland_varname)) &&
-        length(manure_cropland_varname) == 1,
-      manure_cropland_varname,
-      manure_cropland_varname[nut]
+      is.null(names(LandInG_setup$fertilizer$manure_cropland_varname)) &&
+        length(LandInG_setup$fertilizer$manure_cropland_varname) == 1,
+      LandInG_setup$fertilizer$manure_cropland_varname,
+      LandInG_setup$fertilizer$manure_cropland_varname[nut]
     )
     nut_cropland_unit <- ifelse(
-      is.null(names(manure_cropland_unit)) &&
-        length(manure_cropland_unit) == 1,
-      manure_cropland_unit,
-      manure_cropland_unit[nut]
+      is.null(names(LandInG_setup$fertilizer$manure_cropland_unit)) &&
+        length(LandInG_setup$fertilizer$manure_cropland_unit) == 1,
+      LandInG_setup$fertilizer$manure_cropland_unit,
+      LandInG_setup$fertilizer$manure_cropland_unit[nut]
     )
     if (is.null(nut_cropland_name) || !file.exists(nut_cropland_name)) {
       if (nut_is_rate) {
         stop(
-          paste0(
-            "You have set 'manure_ref_area' to ",
-            sQuote(nut_ref_area),
-            ". Please specify a valid 'manure_cropland_name' to use as ",
-            "cropland extent."
-          )
+          "You have set 'manure_ref_area' to ",
+          sQuote(nut_ref_area),
+          ". Please specify a valid 'manure_cropland_name' to use as ",
+          "cropland extent."
         )
       } else {
         stop(
-          paste(
-            "You have set manure_src_unit to be an absolute amount.",
-            "Please specify a valid 'manure_cropland_name' to use as cropland",
-            "extent."
-          )
+          "You have set manure_src_unit to be an absolute amount. ",
+          "Please specify a valid 'manure_cropland_name' to use as cropland ",
+          "extent."
         )
       }
     }
@@ -308,13 +312,15 @@ for (nut in manure_nutrients) {
         "\n"
       )
     }
-    nut_cropland_nc <- nc_open(nut_cropland_name)
+    nut_cropland_nc <- ncdf4::nc_open(nut_cropland_name)
     # Get years included in cropland file. Needs to cover all years of manure
     # data.
     nut_cropland_fileyears <- nc_file_years(nut_cropland_nc)
     # Confirm that unit in file matches manure_cropland_unit
-    ncunit <- ncatt_get(nut_cropland_nc, nut_cropland_varname, "units")
-    if (ncunit$hasatt && ud.convert(1, ncunit$value, nut_cropland_unit) != 1) {
+    ncunit <- ncdf4::ncatt_get(nut_cropland_nc, nut_cropland_varname, "units")
+    if (ncunit$hasatt &&
+        units::ud_convert(1, ncunit$value, nut_cropland_unit) != 1
+    ) {
       warning(
         "Unit in manure_cropland_name ", sQuote(ncunit$value),
         " does not match defined manure_cropland_unit ",
@@ -326,35 +332,38 @@ for (nut in manure_nutrients) {
       nut_cropland_unit <- ncunit$value
     }
     # Check if cropland is given as area or given as cell fraction
-    nut_cropland_is_relative <- !ud.are.convertible(nut_cropland_unit, "m2")
+    nut_cropland_is_relative <-
+      !units::ud_are_convertible(nut_cropland_unit, "m2")
     # Determine corresponding area file.
-    nut_cropland_area_file <- ifelse(
-      is.null(manure_cropland_area_file),
-      NULL,
-      ifelse(
-        is.null(names(manure_cropland_area_file)) &&
-          length(manure_cropland_area_file) == 1,
-        manure_cropland_area_file,
-        ifelse(
-          nut %in% names(manure_cropland_area_file),
-          manure_cropland_area_file[nut],
-          NULL
-        )
-      )
-    )
+    if (!is.null(LandInG_setup$fertilizer$manure_cropland_area_file)) {
+      if (is.null(names(LandInG_setup$fertilizer$manure_cropland_area_file)) &&
+          length(LandInG_setup$fertilizer$manure_cropland_area_file) == 1) {
+        nut_cropland_area_file <-
+          LandInG_setup$fertilizer$manure_cropland_area_file
+      } else if (
+        nut %in% names(LandInG_setup$fertilizer$manure_cropland_area_file)
+      ) {
+        nut_cropland_area_file <-
+          LandInG_setup$fertilizer$manure_cropland_area_file[nut]
+      } else {
+        nut_cropland_area_file <- NULL
+      }
+    } else {
+      nut_cropland_area_file <- NULL
+    }
     # Check if NetCDF data needs to be flipped vertically to correspond to Y
     # axis direction used by raster package
-    tmpraster <- raster(
+    tmpraster <- terra::rast(
       nut_cropland_name,
-      varname = nut_cropland_varname,
-      band = 1
+      subds = nut_cropland_varname,
+      lyrs = 1
     )
     lat_dim <- nut_cropland_nc$dim$lat
-    nut_cropland_flip <- (lat_dim$vals[1] < lat_dim$vals[2]) != 
-      (yFromRow(tmpraster, 1) < yFromRow(tmpraster, 2))
+    nut_cropland_flip <- (lat_dim$vals[1] < lat_dim$vals[2]) !=
+      (terra::yFromRow(tmpraster, 1) < terra::yFromRow(tmpraster, 2))
     # Load/generate corresponding area raster for cropland.
     cat("Fetch corresponding area for cropland data.\n")
-    if (is.null(nut_cropland_area_file) | !file.exists(nut_cropland_area_file)) {
+    if (is.null(nut_cropland_area_file) || !file.exists(nut_cropland_area_file)) {
       if (!is.null(nut_cropland_area_file)) {
         warning(
           "manure_cropland_area_file ", sQuote(nut_cropland_area_file),
@@ -364,44 +373,52 @@ for (nut in manure_nutrients) {
         )
       }
       cat("Using internal calculation to derive cell area\n")
-      nut_cropland_area <- raster(
-        extent(tmpraster),
-        resolution = res(tmpraster)
+      nut_cropland_area <- terra::rast(
+        extent = terra::ext(tmpraster),
+        resolution = terra::res(tmpraster)
       )
-      values(nut_cropland_area) <- ud.convert(
-        rep(
-          cellarea(yFromRow(tmpraster), xres(tmpraster), yres(tmpraster)),
-            each = ncol(tmpraster)
+      terra::values(nut_cropland_area) <- rep(
+        lpjmlkit::calc_cellarea(
+          terra::yFromRow(tmpraster),
+          terra::xres(tmpraster),
+          terra::yres(tmpraster),
+          earth_radius = LandInG_setup$earthradius,
+          return_unit = "m2"
         ),
-        # By default, cellarea() return cell area in m2
-        "m2",
-        # Convert to area unit used by manure data
-        nut_src_area_unit
-      )
+          each = terra::ncol(tmpraster)
+        ) * units::ud_convert(1, "m2", nut_src_area_unit)
+        # By default, calc_cellarea() returns cell area in m2. Convert to area
+        # unit used by manure data
+      terra::units(nut_cropland_area) <- nut_src_area_unit
     } else {
       nut_cropland_area_file_unit <- ifelse(
-        is.null(names(manure_cropland_area_file_unit)) &&
-          length(manure_cropland_area_file_unit) == 1,
-        manure_cropland_area_file_unit,
-        manure_cropland_area_file_unit[nut]
+        is.null(
+          names(LandInG_setup$fertilizer$manure_cropland_area_file_unit)
+        ) &&
+          length(LandInG_setup$fertilizer$manure_cropland_area_file_unit) == 1,
+        LandInG_setup$fertilizer$manure_cropland_area_file_unit,
+        LandInG_setup$fertilizer$manure_cropland_area_file_unit[nut]
       )
       if (
-        !ud.are.convertible(nut_cropland_area_file_unit, nut_src_area_unit)
+        !units::ud_are_convertible(
+          nut_cropland_area_file_unit,
+          nut_src_area_unit
+        )
       ) {
         stop(
-          paste(
-            "Unit of manure_cropland_area_file_unit",
-            sQuote(nut_cropland_area_file_unit),
-            "cannot be converted into area unit of manure data",
-            sQuote(nut_src_area_unit), "detected from", sQuote(nut_src_unit)
-          )
+          "Unit of manure_cropland_area_file_unit ",
+          sQuote(nut_cropland_area_file_unit),
+          " cannot be converted into area unit of manure data ",
+          sQuote(nut_src_area_unit), " detected from ", sQuote(nut_src_unit)
         )
       }
       nut_cropland_area <- load_hyde_area(
         nut_cropland_area_file,
-        nut_cropland_area_file_unit,
-        nut_src_area_unit,
-        tmpraster
+        fileunits = nut_cropland_area_file_unit,
+        return_units = nut_src_area_unit,
+        return_raster = tmpraster,
+        earth_radius = LandInG_setup$earthradius,
+        gextent = global_extent
       )
       nut_cropland_area <- nut_cropland_area$area
     }
@@ -409,7 +426,19 @@ for (nut in manure_nutrients) {
   }
   # Loop over manure source files
   for (nut_filename in src_filename) {
-    nut_nc <- nc_open(nut_filename)
+    nut_nc <- ncdf4::nc_open(nut_filename)
+    # Check LandInG versions
+    globalatt <- ncdf4::ncatt_get(nut_nc, 0)
+    if (
+      is.null(globalatt$LandInG_version) ||
+        globalatt$LandInG_version != LandInG_setup$LandInG_version
+    ) {
+      warning(
+        nut_filename, " was created with a different version of LandInG.",
+        " It may not be compatible.",
+        immediate. = TRUE, call. = FALSE
+      )
+    }
     # Determine years in NetCDF file.
     nut_fileyears <- nc_file_years(nut_nc)
     # Determine NetCDF variable name. If file contains more than one variable
@@ -423,21 +452,23 @@ for (nut in manure_nutrients) {
       paste0("manure_", nut)
     )
     # Check correct unit in NetCDF file.
-    ncunit <- ncatt_get(nut_nc, nut_varname, "units")
-    if (ncunit$hasatt && !ud.are.convertible(ncunit$value, nut_src_unit)) {
-      nc_close(nut_nc)
+    ncunit <- ncdf4::ncatt_get(nut_nc, nut_varname, "units")
+    if (ncunit$hasatt &&
+        !units::ud_are_convertible(ncunit$value, nut_src_unit)
+    ) {
+      ncdf4::nc_close(nut_nc)
       if (exists("nut_cropland_nc")) {
-        nc_close(nut_cropland_nc)
+        ncdf4::nc_close(nut_cropland_nc)
       }
       stop(
-        paste(
-          "Unit in file", sQuote(nut_filename), sQuote(ncunit$value),
-          "does not match and cannot be converted into defined",
-          "manure_src_unit", sQuote(nut_src_unit)
-        )
+        "Unit in file ", sQuote(nut_filename), " ", sQuote(ncunit$value),
+        " does not match and cannot be converted into defined ",
+        "manure_src_unit ", sQuote(nut_src_unit)
       )
     }
-    if (ncunit$hasatt && ud.convert(1, ncunit$value, nut_src_unit) != 1) {
+    if (ncunit$hasatt &&
+        units::ud_convert(1, ncunit$value, nut_src_unit) != 1
+    ) {
       warning(
         "Unit in file ", sQuote(nut_filename), " ",
         sQuote(ncunit$value),
@@ -449,75 +480,76 @@ for (nut in manure_nutrients) {
     }
     # Determine if conversion is necessary from NetCDF file unit to
     # manure_src_unit
-    nut_read_conv <- ud.convert(1, ncunit$value, nut_src_unit)
+    nut_read_conv <- units::ud_convert(1, ncunit$value, nut_src_unit)
     # Determine if manure source data needs to be flipped vertically to match
     # Y axis direction used by raster package
-    nut_raster <- raster(nut_filename, varname = nut_varname, band = 1)
-    nut_res <- res(nut_raster)
+    nut_raster <- terra::rast(nut_filename, subds = nut_varname, lyrs = 1)
+    nut_res <- terra::res(nut_raster)
     lat_dim <- nut_nc$dim$lat
-    nut_flip <- (lat_dim$vals[1] < lat_dim$vals[1]) != 
-      (yFromRow(nut_raster, 1) < yFromRow(nut_raster, 2))
+    nut_flip <- (lat_dim$vals[1] < lat_dim$vals[2]) !=
+      (terra::yFromRow(nut_raster, 1) < terra::yFromRow(nut_raster, 2))
     # Check if cropland data covers all years in manure data.
     if (exists("nut_cropland_fileyears") &&
-      !all(nut_fileyears %in% nut_cropland_fileyears)
+        !all(nut_fileyears %in% nut_cropland_fileyears)
     ) {
-      nc_close(nut_cropland_nc)
-      nc_close(nut_nc)
+      ncdf4::nc_close(nut_cropland_nc)
+      ncdf4::nc_close(nut_nc)
       stop(
-        paste(
-          "Cropland file", sQuote(nut_cropland_name),
-          "does not cover all years in manure source file",
-          sQuote(nut_filename)
-        )
+        "Cropland file ", sQuote(nut_cropland_name),
+        " does not cover all years in manure source file ",
+        sQuote(nut_filename)
       )
     }
     # If cropland data is needed, check that it is compatible with manure data.
     if (exists("nut_cropland_nc")) {
-      nut_cropland_raster <- raster(
+      nut_cropland_raster <- terra::rast(
         nut_cropland_name,
-        varname = nut_cropland_varname,
-        band = 1
+        subds = nut_cropland_varname,
+        lyrs = 1
       )
-      nut_cropland_res <- res(nut_cropland_raster)
+      nut_cropland_res <- terra::res(nut_cropland_raster)
       cropland_2_nut <- nut_res / nut_cropland_res
       if (any(cropland_2_nut < 0.999)) {
-        nc_close(nut_cropland_nc)
-        nc_close(nut_nc)
+        ncdf4::nc_close(nut_cropland_nc)
+        ncdf4::nc_close(nut_nc)
         stop("Cropland data is too coarse for manure data.")
       }
       # Crop cropland to spatial extent of manure if it is larger.
-      nut_cropland_raster_crop <- crop(nut_cropland_raster, nut_raster)
+      nut_cropland_raster_crop <- terra::crop(nut_cropland_raster, nut_raster)
       # Save spatial extent for later.
-      nut_cropland_raster_crop_extent <- extent(nut_cropland_raster_crop)
+      nut_cropland_raster_crop_extent <- terra::ext(nut_cropland_raster_crop)
       # Check if resolution and cell boundaries match
       nut_cropland_raster_crop <- try(
         match_admin_to_data(nut_raster, nut_cropland_raster_crop, fun = sum)
       )
       if (class(nut_cropland_raster_crop) == "try-error") {
-        nc_close(nut_cropland_nc)
-        nc_close(nut_nc)
+        ncdf4::nc_close(nut_cropland_nc)
+        ncdf4::nc_close(nut_nc)
         stop("Manure and cropland are incompatible")
       }
       cropland_2_nut <- round(cropland_2_nut)
       # Check if cropland covers full extent of manure data.
-      if (ncell(nut_cropland_raster_crop) != ncell(nut_raster)) {
-        nc_close(nut_cropland_nc)
-        nc_close(nut_nc)
+      if (terra::ncell(nut_cropland_raster_crop) != terra::ncell(nut_raster)) {
+        ncdf4::nc_close(nut_cropland_nc)
+        ncdf4::nc_close(nut_nc)
         stop("Cropland does not cover full extent of manure data.")
       }
       rm(nut_cropland_raster_crop)
     }
     if (nut_is_rate && nut_ref_area == "grid") {
       cat("Manure", nut, "is given as mass per grid area. Fetch area.\n")
-      nut_area_file <- ifelse(
-        is.null(manure_area_file),
-        NULL,
-        ifelse(
-          is.null(names(manure_area_file)) && length(manure_area_file) == 1,
-          manure_area_file,
-          ifelse(nut %in% names(manure_area_file), manure_area_file[nut], NULL)
-        )
-      )
+      if (!is.null(LandInG_setup$fertilizer$manure_area_file)) {
+        if (is.null(names(LandInG_setup$fertilizer$manure_area_file)) &&
+            length(LandInG_setup$fertilizer$manure_area_file) == 1) {
+          nut_area_file <- LandInG_setup$fertilizer$manure_area_file
+        } else if (nut %in% names(LandInG_setup$fertilizer$manure_area_file)) {
+          nut_area_file <- LandInG_setup$fertilizer$manure_area_file[nut]
+        } else {
+          nut_area_file <- NULL
+        }
+      } else {
+        nut_area_file <- NULL
+      }
 
       if (is.null(nut_area_file) || !file.exists(nut_area_file)) {
         if (!is.null(nut_area_file)) {
@@ -529,63 +561,70 @@ for (nut in manure_nutrients) {
           )
         }
         cat("Using internal calculation to derive cell area\n")
-        nut_area <- raster(extent(nut_raster), resolution = res(nut_raster))
-        values(nut_area) <- ud.convert(
-          rep(
-            cellarea(yFromRow(nut_area), xres(nut_area), yres(nut_area)),
-            each = ncol(nut_area)
-          ),
-          # By default, cellarea() returns cell area in m2
-          "m2",
-          # Convert to area unit used by manure data
-          nut_src_area_unit
+        nut_area <- terra::rast(
+          extent = terra::ext(nut_raster),
+          resolution = terra::res(nut_raster)
         )
+        terra::values(nut_area) <- rep(
+          lpjmlkit::calc_cellarea(
+            terra::yFromRow(nut_area),
+            terra::xres(nut_area),
+            terra::yres(nut_area),
+            return_unit = "m2",
+            earth_radius = LandInG_setup$earthradius
+          ),
+          each = ncol(nut_area)
+        ) * units::ud_convert(1, "m2", nut_src_area_unit)
+        # By default, calc_cellarea() returns cell area in m2. Convert to area
+        # unit used by manure data.
+        terra::units(nut_area) <- nut_src_area_unit
       } else {
         nut_area_unit <- ifelse(
-          is.null(names(manure_area_unit)) && length(manure_area_unit) == 1,
-          manure_area_unit,
-          manure_area_unit[nut]
+          is.null(names(LandInG_setup$fertilizer$manure_area_unit)) &&
+            length(LandInG_setup$fertilizer$manure_area_unit) == 1,
+          LandInG_setup$fertilizer$manure_area_unit,
+          LandInG_setup$fertilizer$manure_area_unit[nut]
         )
-        if (!ud.are.convertible(nut_area_unit, nut_src_area_unit)) {
+        if (!units::ud_are_convertible(nut_area_unit, nut_src_area_unit)) {
           stop(
-            paste(
-              "Unit of manure_area_file", sQuote(nut_area_unit),
-              "cannot be converted into area unit of manure data",
-              sQuote(nut_src_area_unit), "detected from", sQuote(nut_src_unit)
-            )
+            "Unit of manure_area_file ", sQuote(nut_area_unit),
+            " cannot be converted into area unit of manure data ",
+            sQuote(nut_src_area_unit), " detected from ", sQuote(nut_src_unit)
           )
         }
         nut_area <- load_hyde_area(
-          manure_area_file,
-          nut_area_unit,
-          nut_src_area_unit,
-          nut_raster
+          nut_area_file,
+          fileunits = nut_area_unit,
+          return_units = nut_src_area_unit,
+          return_raster = nut_raster,
+          earth_radius = LandInG_setup$earthradius,
+          gextent = global_extent
         )
         nut_area <- nut_area$area
       }
     }
-      
+
     # Set up NetCDF output file
-    lon_dim <- ncdim_def(
+    lon_dim <- ncdf4::ncdim_def(
       name = "longitude",
       units = "degrees_east",
-      vals = xFromCol(nut_raster),
+      vals = terra::xFromCol(nut_raster),
       longname = "Longitude"
     )
-    lat_dim <- ncdim_def(
+    lat_dim <- ncdf4::ncdim_def(
       name = "latitude",
       units = "degrees_north",
-      vals = yFromRow(nut_raster),
+      vals = terra::yFromRow(nut_raster),
       longname = "Latitude"
     )
-    time_dim <- ncdim_def(
+    time_dim <- ncdf4::ncdim_def(
       name = "time",
       units = "year",
       vals = nut_fileyears,
       unlim = TRUE
     )
     # Variable containing manure application rate normalized to cropland
-    nut_output_var <- ncvar_def(
+    nut_output_var <- ncdf4::ncvar_def(
       name = paste0("manure_", nut, "_rate"),
       units = nut_rate_unit,
       dim = list(lon_dim, lat_dim, time_dim),
@@ -595,7 +634,7 @@ for (nut in manure_nutrients) {
     )
     # Variable containing manure amount that could not be allocated, either due
     # to missing cropland or due to exceeding manure_threshold.
-    nut_noalloc_var <- ncvar_def(
+    nut_noalloc_var <- ncdf4::ncvar_def(
       name = paste0("manure_", nut, "_noalloc"),
       units = nut_output_mass_unit,
       dim = list(lon_dim, lat_dim, time_dim),
@@ -663,13 +702,20 @@ for (nut in manure_nutrients) {
     if (file.exists(nut_output_name)) {
       cat(nut_output_name, "exists already and will be overwritten.\n")
     }
-    nut_output_nc <- nc_create(
+    nut_output_nc <- ncdf4::nc_create(
       filename = nut_output_name,
       vars = list(nut_output_var, nut_noalloc_var)
     )
+    # Save LandInG version number in file.
+    ncdf4::ncatt_put(
+      nc = nut_output_nc,
+      varid = 0,
+      attname = "LandInG_version",
+      attval = LandInG_setup$LandInG_version
+    )
     for (year in nut_fileyears) {
       cat(year, "\n")
-      nut_src_data <- ncvar_get(
+      nut_src_data <- ncdf4::ncvar_get(
         nut_nc,
         nut_varname,
         start = c(1, 1, which(nut_fileyears == year)),
@@ -682,7 +728,7 @@ for (nut in manure_nutrients) {
       nut_src_data <- nut_src_data * nut_read_conv
       nut_data_unit <- nut_src_unit
       if (exists("nut_cropland_nc")) {
-        nut_cropland_data <- ncvar_get(
+        nut_cropland_data <- ncdf4::ncvar_get(
           nut_cropland_nc,
           nut_cropland_varname,
           start = c(1, 1, which(nut_cropland_fileyears == year)),
@@ -695,81 +741,97 @@ for (nut in manure_nutrients) {
         if (nut_cropland_is_relative) {
           # Convert to cell fraction, then multiply with cell area in
           # nut_src_area_unit
-          nut_cropland_data <-
-            ud.convert(nut_cropland_data, nut_cropland_unit, "1") *
-            values(nut_cropland_area)
+          nut_cropland_data <- nut_cropland_data *
+            units::ud_convert(1, nut_cropland_unit, "1") *
+            ul(terra::values(nut_cropland_area))
         } else {
           # Convert area unit in cropland data to nut_src_area_unit
-          nut_cropland_data <-
-            ud.convert(nut_cropland_data, nut_cropland_unit, nut_src_area_unit)
+          nut_cropland_data <- nut_cropland_data *
+            units::ud_convert(1, nut_cropland_unit, nut_src_area_unit)
         }
         if (
-          any(c(nut_cropland_data) > (values(nut_cropland_area) * 1.0001),
-              na.rm = TRUE)
+          any(
+            c(nut_cropland_data) >
+              (ul(terra::values(nut_cropland_area)) * 1.0001),
+            na.rm = TRUE
+          )
         ) {
           warning(
             "Values in ",
             length(
-              which(c(nut_cropland_data) > (values(nut_cropland_area) * 1.0001))
+              which(
+                c(nut_cropland_data) >
+                  (ul(terra::values(nut_cropland_area)) * 1.0001)
+              )
             ),
             " cell(s) of ", sQuote(nut_cropland_varname),
             " exceed grid cell area by up to ",
-            max(c(nut_cropland_data) - values(nut_cropland_area), na.rm = TRUE),
+            max(
+              c(nut_cropland_data) - ul(terra::values(nut_cropland_area)),
+              na.rm = TRUE
+            ),
             " ", nut_src_area_unit, ". Reducing to grid cell area.",
             immediate. = TRUE, call. = FALSE
           )
         }
         nut_cropland_data <- pmin(
           nut_cropland_data,
-          matrix(values(nut_cropland_area), nrow = ncol(nut_cropland_area))
+          matrix(
+            ul(terra::values(nut_cropland_area)),
+            nrow = terra::ncol(nut_cropland_area)
+          )
         )
         # Crop to spatial extent of manure data (if necessary)
-        xsubset <- which(xFromCol(nut_cropland_raster) > xmin(nut_raster) &
-          xFromCol(nut_cropland_raster) < xmax(nut_raster))
-        ysubset <- which(yFromRow(nut_cropland_raster) > ymin(nut_raster) &
-          yFromRow(nut_cropland_raster) < ymax(nut_raster))
+        xsubset <- which(
+          terra::xFromCol(nut_cropland_raster) > terra::xmin(nut_raster) &
+            terra::xFromCol(nut_cropland_raster) < terra::xmax(nut_raster)
+        )
+        ysubset <- which(
+          terra::yFromRow(nut_cropland_raster) > terra::ymin(nut_raster) &
+            terra::yFromRow(nut_cropland_raster) < terra::ymax(nut_raster)
+        )
         nut_cropland_data <- nut_cropland_data[xsubset, ysubset, drop = FALSE]
         if (any(cropland_2_nut > 1)) {
           # Need to aggregate cropland to resolution of manure.
-          tmpraster <- raster(
+          tmpraster <- terra::rast(
             nut_cropland_raster_crop_extent,
-            resolution = res(nut_cropland_res)
+            resolution = terra::res(nut_cropland_res)
           )
-          values(tmpraster) <- c(nut_cropland_data)
-          tmpraster <- aggregate(
+          terra::values(tmpraster) <- c(nut_cropland_data)
+          tmpraster <- terra::aggregate(
             tmpraster,
-            fact = cropland_2_nut,
+            fact = rev(cropland_2_nut), # res() returns lon/lat, fact is lat/lon
             fun = sum,
             na.rm = TRUE
           )
-          if (cellStats(tmpraster, sum) !=
-            sum(nut_cropland_data, na.rm = TRUE)
+          if (terra::global(tmpraster, sum, na.rm = TRUE) !=
+              sum(nut_cropland_data, na.rm = TRUE)
           ) {
             stop("Error aggregating cropland data to manure resolution")
           }
-          nut_cropland_data <- array(values(tmpraster), dim = dim(nut_src_data))
+          nut_cropland_data <- array(
+            ul(terra::values(tmpraster)),
+            dim = dim(nut_src_data)
+          )
           rm(tmpraster)
         }
       }
       if ((!is.null(nut_ref_area) && nut_ref_area == "grid") || !nut_is_rate) {
         if (nut_is_rate) {
           # Convert rate normalized to grid to total amount
-          nut_src_data <- nut_src_data * values(nut_area)
+          nut_src_data <- nut_src_data * ul(terra::values(nut_area))
           nut_data_unit <- nut_src_mass_unit
         }
         # Record any manure amounts that will be lost by scaling to cropland.
         nut_noalloc_data <- array(0, dim = dim(nut_src_data))
         # Cells that will be lost
         noalloc <- which(nut_cropland_data == 0 | is.na(nut_cropland_data))
-        nut_noalloc_data[noalloc] <- ud.convert(
-          nut_src_data[noalloc],
-          nut_src_mass_unit,
-          nut_output_mass_unit
-        )
+        nut_noalloc_data[noalloc] <- nut_src_data[noalloc] *
+          units::ud_convert(1, nut_src_mass_unit, nut_output_mass_unit)
         nut_noalloc_global[as.character(year), "scaling"] <-
           sum(nut_noalloc_data, na.rm = TRUE)
-                                    
-        nut_noalloc_global[as.character(year), "total"] <- ud.convert(
+
+        nut_noalloc_global[as.character(year), "total"] <- units::ud_convert(
           sum(nut_src_data, na.rm = TRUE),
           nut_src_mass_unit,
           nut_output_mass_unit
@@ -799,21 +861,19 @@ for (nut in manure_nutrients) {
         nut_noalloc_data <- array(0, dim = dim(nut_src_data))
       }
       # Enforce manure_rate_unit for output.
-      nut_output_data <- ud.convert(nut_rate_data, nut_data_unit, nut_rate_unit)
+      nut_output_data <- nut_rate_data *
+        units::ud_convert(1, nut_data_unit, nut_rate_unit)
       # Check if manure_threshold meeds to be applied.
       if (is.finite(nut_threshold) && nut_threshold_res == "source") {
         # Apply manure_threshold to data. All manure above threshold is added to
         # nut_noalloc_data
         # Make sure nut_cropland_data is in correct unit so that rate can be
         # converted to absolute amount.
-        nut_cropland_data <- ud.convert(
-          nut_cropland_data,
-          nut_src_area_unit,
-          nut_output_area_unit
-        )
+        nut_cropland_data <- nut_cropland_data *
+          units::ud_convert(1, nut_src_area_unit, nut_output_area_unit)
         if (!is.null(nut_ref_area) && nut_ref_area == "cropland") {
           # Convert nut_src_data into absolute amount for comparison
-          nut_noalloc_global[as.character(year), "total"] <- ud.convert(
+          nut_noalloc_global[as.character(year), "total"] <- units::ud_convert(
             sum(nut_src_data * nut_cropland_data, na.rm = TRUE),
             nut_src_mass_unit,
             nut_output_mass_unit
@@ -842,14 +902,14 @@ for (nut in manure_nutrients) {
         nut_output_data[which(nut_output_data > nut_threshold)] <- nut_threshold
       }
       # Write data to file
-      ncvar_put(
+      ncdf4::ncvar_put(
         nc = nut_output_nc,
         varid = nut_output_var$name,
         vals = c(nut_output_data),
         start = c(1, 1, which(time_dim$vals == year)),
         count = c(-1, -1, 1)
       )
-      ncvar_put(
+      ncdf4::ncvar_put(
         nc = nut_output_nc,
         varid = nut_noalloc_var$name,
         vals = c(nut_noalloc_data),
@@ -857,10 +917,10 @@ for (nut in manure_nutrients) {
         count = c(-1, -1, 1)
       )
     } # End of year loop
-    nc_close(nut_nc)
+    ncdf4::nc_close(nut_nc)
     if (exists("nut_cropland_nc"))
-      nc_close(nut_cropland_nc)
-    nc_close(nut_output_nc)
+      ncdf4::nc_close(nut_cropland_nc)
+    ncdf4::nc_close(nut_output_nc)
     cat(time_dim$len, "years written to", nut_output_name, "\n")
     if (any(nut_noalloc_global[, c("scaling", "threshold")] > 0)) {
       # Rename columns of nut_noalloc_global to something more readable
@@ -898,4 +958,3 @@ for (nut in manure_nutrients) {
     }
   } # End of loop over source files
 }
-

@@ -60,12 +60,12 @@ if (length(commandArgs(trailingOnly = TRUE)) > 0) {
       "Parameter start_year provided as command line argument:",
       start_year, "\n"
     )
-    if (start_year < min(output_period)) {
+    if (start_year < min(LandInG_setup$landuse$output_period)) {
       # Cannot exceed output_period
-      start_year <- min(output_period)
+      start_year <- min(LandInG_setup$landuse$output_period)
     }
   } else {
-    start_year <- min(output_period)
+    start_year <- min(LandInG_setup$landuse$output_period)
   }
   if (any(grepl("end_year", commandArgs(trailingOnly = TRUE)))) {
     end_year <- strsplit(
@@ -76,9 +76,9 @@ if (length(commandArgs(trailingOnly = TRUE)) > 0) {
       grep("end_year", unlist(end_year), invert = TRUE, value = TRUE)
     )
     cat("Parameter end_year provided as command line argument:", end_year, "\n")
-    if (end_year > max(output_period)) {
+    if (end_year > max(LandInG_setup$landuse$output_period)) {
       # Cannot exceed output_period
-      end_year <- max(output_period)
+      end_year <- max(LandInG_setup$landuse$output_period)
     }
     if (end_year < start_year) {
       stop(
@@ -87,11 +87,11 @@ if (length(commandArgs(trailingOnly = TRUE)) > 0) {
       )
     }
   } else {
-    end_year <- max(output_period)
+    end_year <- max(LandInG_setup$landuse$output_period)
   }
 } else  {
-  start_year <- min(output_period)
-  end_year <- max(output_period)
+  start_year <- min(LandInG_setup$landuse$output_period)
+  end_year <- max(LandInG_setup$landuse$output_period)
 }
 ################################################################################
 
@@ -102,51 +102,19 @@ if (length(commandArgs(trailingOnly = TRUE)) > 0) {
 ## Needs to match the filename pattern used in harvested_area_timeseries.R    ##
 # Concatenate all possible version strings
 file_version_string <- paste0(
-  ifelse(
-    exists("aquastat_version_string") && nchar(aquastat_version_string) > 0,
-    paste0("_", aquastat_version_string),
-    ""
-  ),
-  ifelse(
-    exists("fao_version_string") && nchar(fao_version_string) > 0,
-    paste0("_", fao_version_string),
-    ""
-  ),
-  ifelse(
-    exists("gadm_version_string") && nchar(gadm_version_string) > 0,
-    paste0("_", gadm_version_string),
-    ""
-  ),
-  ifelse(
-    exists("gaez_version_string") && nchar(gaez_version_string) > 0,
-    paste0("_", gaez_version_string),
-    ""
-  ),
-  ifelse(
-    exists("hyde_version_string") && nchar(hyde_version_string) > 0,
-    paste0("_", hyde_version_string),
-    ""
-  ),
-  ifelse(
-    exists("mirca_version_string") && nchar(mirca_version_string) > 0,
-    paste0("_", mirca_version_string),
-    ""
-  ),
-  ifelse(
-    exists("monfreda_version_string") && nchar(monfreda_version_string) > 0,
-    paste0("_", monfreda_version_string),
-    ""
-  ),
-  ifelse(
-    exists("ramankutty_version_string") && nchar(ramankutty_version_string) > 0,
-    paste0("_", ramankutty_version_string),
-    ""
-  )
+  add_version_string(LandInG_setup$landuse$aquastat_version_string),
+  add_version_string(LandInG_setup$landuse$fao_version_string),
+  add_version_string(LandInG_setup$landuse$gadm_version_string),
+  add_version_string(LandInG_setup$landuse$gaez_version_string),
+  add_version_string(LandInG_setup$landuse$hyde_version_string),
+  add_version_string(LandInG_setup$landuse$mirca_version_string),
+  add_version_string(LandInG_setup$landuse$mon_version_string),
+  add_version_string(LandInG_setup$landuse$ram_version_string)
 )
 input_timeseries_filenames <- list.files(
-  dirname(ha_timeseries_filename_base),
+  dirname(LandInG_setup$landuse$ha_timeseries_filename_base),
   pattern = paste0(
-    basename(ha_timeseries_filename_base), "_",
+    basename(LandInG_setup$landuse$ha_timeseries_filename_base), "_",
     "[0-9]{4}-[0-9]{4}", # chunk_start, chunk_end in harvested_area_timeseries.R
     file_version_string,
     ".nc"
@@ -155,7 +123,7 @@ input_timeseries_filenames <- list.files(
 if (length(input_timeseries_filenames) == 0) {
   stop(
     "No harvested area timeseries files found in ",
-    sQuote(dirname(ha_timeseries_filename_base)), ".\n",
+    sQuote(dirname(LandInG_setup$landuse$ha_timeseries_filename_base)), ".\n",
     "Check that filename pattern used for search matches filename pattern ",
     "used in harvested_area_timeseries.R"
   )
@@ -202,17 +170,31 @@ cat(
   "This script is set to process harvested areas for ",
   start_year, "-", end_year, "\n", sep = ""
 )
-cat("Crop aggregation table used:", sQuote(crop_aggregation_file), "\n")
+cat(
+  "Crop aggregation table used:",
+  sQuote(LandInG_setup$landuse$crop_aggregation_file),
+  "\n"
+)
 cat(
   "This aggregation table aggregates",
-  length(unique(crop_aggregation_types$FAOSTAT_name)), "crops to",
-  length(unique(crop_aggregation_types$LPJmL_name)),
+  length(unique(LandInG_setup$landuse$crop_aggregation_types$FAOSTAT_name)),
+  "crops to",
+  length(unique(LandInG_setup$landuse$crop_aggregation_types$LPJmL_name)),
   "aggregate crops and crop groups:\n"
 )
-for (cft in sort(unique(crop_aggregation_types$LPJmL_name))) {
+for (
+  cft in sort(unique(LandInG_setup$landuse$crop_aggregation_types$LPJmL_name))
+) {
   cat("Aggregate:", sQuote(cft), "\n")
-  index <- which(crop_aggregation_types$LPJmL_name == cft)
-  cat(toString(sQuote(unique(crop_aggregation_types$FAOSTAT_name)[index])), "\n")
+  index <- which(LandInG_setup$landuse$crop_aggregation_types$LPJmL_name == cft)
+  cat(
+    toString(
+      sQuote(
+        unique(LandInG_setup$landuse$crop_aggregation_types$FAOSTAT_name)[index]
+      )
+    ),
+    "\n"
+  )
 }
 ################################################################################
 
@@ -223,27 +205,37 @@ for (cft in sort(unique(crop_aggregation_types$LPJmL_name))) {
 year_processed <- integer(0)
 fileyears <- integer(0)
 for (fileindex in seq_along(input_timeseries_filenames)) {
-  input_timeseries_file <- nc_open(
+  input_timeseries_file <- ncdf4::nc_open(
     filename = file.path(
-      dirname(ha_timeseries_filename_base),
+      dirname(LandInG_setup$landuse$ha_timeseries_filename_base),
       input_timeseries_filenames[fileindex]
     )
   )
   # Check which years have finished processing
   year_processed <- c(
     year_processed,
-    ncvar_get(input_timeseries_file, "year_processed")
+    ncdf4::ncvar_get(input_timeseries_file, "year_processed")
   )
   fileyears <- c(
     fileyears,
-    min(output_period) + input_timeseries_file$dim$time$vals
+    min(LandInG_setup$landuse$output_period) +
+      input_timeseries_file$dim$time$vals
   )
   # Check that crops match
-  nccrops <- ncvar_get(input_timeseries_file, "crop")
-  if (any(!nccrops %in% crop_aggregation_types$FAOSTAT_name)) {
+  nccrops <- ncdf4::ncvar_get(input_timeseries_file, "crop")
+  if (
+    any(!nccrops %in% LandInG_setup$landuse$crop_aggregation_types$FAOSTAT_name)
+  ) {
     warning(
       "Crop(s) ",
-      toString(sQuote(setdiff(nccrops, crop_aggregation_types$FAOSTAT_name))),
+      toString(
+        sQuote(
+          setdiff(
+            nccrops,
+            LandInG_setup$landuse$crop_aggregation_types$FAOSTAT_name
+          )
+        )
+      ),
       " from ", sQuote(input_timeseries_file$filename),
       " missing in crop aggregation table.\n",
       "Your aggregated crops will be incomplete.",
@@ -251,10 +243,19 @@ for (fileindex in seq_along(input_timeseries_filenames)) {
       immediate. = TRUE
     )
   }
-  if (any(!crop_aggregation_types$FAOSTAT_name %in% nccrops)) {
+  if (
+    any(!LandInG_setup$landuse$crop_aggregation_types$FAOSTAT_name %in% nccrops)
+  ) {
     message(
       "Error: Crop(s) ",
-      toString(sQuote(setdiff(crop_aggregation_types$FAOSTAT_name, nccrops))),
+      toString(
+        sQuote(
+          setdiff(
+            LandInG_setup$landuse$crop_aggregation_types$FAOSTAT_name,
+            nccrops
+          )
+        )
+      ),
       " from crop aggregation table missing in ",
       sQuote(input_timeseries_file$filename)
     )
@@ -271,11 +272,14 @@ for (fileindex in seq_along(input_timeseries_filenames)) {
   }
   # Check NetCDF dimensions
   if (exists("lon_dim")) {
-    if (!identical(lon_dim, input_timeseries_file$dim$lon) &&
-      any(seq(start_year, end_year) %in% seq.int(
-        input_timeseries_fileyears[fileindex, "start"],
-        input_timeseries_fileyears[fileindex, "end"]
-      ))
+    if (
+      !identical(lon_dim, input_timeseries_file$dim$lon) &&
+        any(
+          seq(start_year, end_year) %in% seq.int(
+            input_timeseries_fileyears[fileindex, "start"],
+            input_timeseries_fileyears[fileindex, "end"]
+          )
+        )
     ) {
       stop(
         "Longitude dimension differs in ",
@@ -286,11 +290,14 @@ for (fileindex in seq_along(input_timeseries_filenames)) {
     lon_dim <- input_timeseries_file$dim$lon
   }
   if (exists("lat_dim")) {
-    if (!identical(lat_dim, input_timeseries_file$dim$lat) &&
-      any(seq(start_year, end_year) %in% seq.int(
-        input_timeseries_fileyears[fileindex, "start"],
-        input_timeseries_fileyears[fileindex, "end"]
-      ))
+    if (
+      !identical(lat_dim, input_timeseries_file$dim$lat) &&
+        any(
+          seq(start_year, end_year) %in% seq.int(
+            input_timeseries_fileyears[fileindex, "start"],
+            input_timeseries_fileyears[fileindex, "end"]
+          )
+        )
     ) {
       stop(
         "Latitude dimension differs in ",
@@ -300,7 +307,7 @@ for (fileindex in seq_along(input_timeseries_filenames)) {
   } else {
     lat_dim <- input_timeseries_file$dim$lat
   }
-  nc_close(input_timeseries_file)
+  ncdf4::nc_close(input_timeseries_file)
 }
 if (!any(
   year_processed == 1 & fileyears >= start_year & fileyears <= end_year
@@ -308,7 +315,7 @@ if (!any(
   # No data available
   in_period <- which(
     input_timeseries_fileyears[, "start"] >= start_year &
-    input_timeseries_fileyears[, "end"] <= end_year
+      input_timeseries_fileyears[, "end"] <= end_year
   )
   stop(
     "All years in ",
@@ -332,12 +339,10 @@ if (any(
 )) {
   in_period <- which(
     input_timeseries_fileyears[, "start"] >= start_year &
-    input_timeseries_fileyears[, "end"] <= end_year
+      input_timeseries_fileyears[, "end"] <= end_year
   )
   missing <- which(
-    year_processed != 1 &
-    fileyears >= start_year &
-    fileyears <= end_year
+    year_processed != 1 & fileyears >= start_year & fileyears <= end_year
   )
   warning(
     "Year(s) ", toString(fileyears[missing]),
@@ -349,9 +354,7 @@ if (any(
     immediate. = TRUE
   )
   valid <- which(
-    year_processed == 1 &
-    fileyears >= start_year &
-    fileyears <= end_year
+    year_processed == 1 & fileyears >= start_year & fileyears <= end_year
   )
   start_year <- min(fileyears[valid])
   end_year <- min(fileyears[missing]) - 1
@@ -363,7 +366,7 @@ if (any(
 ## Generate NetCDF files for aggregated crop list                             ##
 ## Chunk length (number of years per file) depends on number of aggregated    ##
 ## crop types.
-cfts <- sort(unique(crop_aggregation_types$LPJmL_name))
+cfts <- sort(unique(LandInG_setup$landuse$crop_aggregation_types$LPJmL_name))
 if (length(cfts) <= 10) {
   chunklength <- 200
 } else if (length(cfts) <= 20) {
@@ -375,39 +378,51 @@ if (length(cfts) <= 10) {
 }
 # Variables included in NetCDF files
 nc_vars <- c(
-  rainfed_output_name,
-  irrigated_output_name,
-  rainfed_output_sum_name,
-  irrigated_output_sum_name,
-  total_output_sum_name,
+  LandInG_setup$landuse$rainfed_output_name,
+  LandInG_setup$landuse$irrigated_output_name,
+  LandInG_setup$landuse$rainfed_output_sum_name,
+  LandInG_setup$landuse$irrigated_output_sum_name,
+  LandInG_setup$landuse$total_output_sum_name,
   "year_processed"
 )
 # Start and end years of chunks
-chunk_start <- seq(min(output_period), max(output_period), by = chunklength)
+chunk_start <- seq(
+  min(LandInG_setup$landuse$output_period),
+  max(LandInG_setup$landuse$output_period),
+  by = chunklength
+)
 chunk_end <- chunk_start + chunklength - 1
-chunk_end[which(chunk_end > max(output_period))] <- max(output_period)
+chunk_end[which(chunk_end > max(LandInG_setup$landuse$output_period))] <-
+  max(LandInG_setup$landuse$output_period)
 for (chunk in seq_along(chunk_start)) {
   # NetCDF dimensions (lon_dim and lat_dim are copied from harvested area
   # timeseries files)
-  time_dim <- ncdim_def(
+  time_dim <- ncdf4::ncdim_def(
     name = "time",
-    units = paste0("years since ", min(output_period), "-01-01"),
-    vals = (chunk_start[chunk]:chunk_end[chunk]) - min(output_period),
+    units = paste0(
+      "years since ", min(LandInG_setup$landuse$output_period), "-01-01"
+    ),
+    vals = seq(chunk_start[chunk], chunk_end[chunk]) -
+      min(LandInG_setup$landuse$output_period),
     unlim = TRUE
   )
-  nchar_dim <- ncdim_def(
+  nchar_dim <- ncdf4::ncdim_def(
     name = "nchar",
     units = "",
-    vals = seq_len(max(nchar(crop_aggregation_types$LPJmL_name))),
+    vals = seq_len(
+      max(nchar(LandInG_setup$landuse$crop_aggregation_types$LPJmL_name))
+    ),
     create_dimvar = FALSE
   )
-  crop_dim <- ncdim_def(
+  crop_dim <- ncdf4::ncdim_def(
     name = "crop",
     units = "",
-    vals = seq_along(unique(crop_aggregation_types$LPJmL_name)),
+    vals = seq_along(
+      unique(LandInG_setup$landuse$crop_aggregation_types$LPJmL_name)
+    ),
     create_dimvar = FALSE
   )
-  crop_var <- ncvar_def(
+  crop_var <- ncdf4::ncvar_def(
     name = "crop",
     units = "",
     dim = list(nchar_dim, crop_dim),
@@ -415,9 +430,9 @@ for (chunk in seq_along(chunk_start)) {
     prec = "char"
   )
   # Crop-group-specfic variables
-  rainfed_area_var <- ncvar_def(
-    name = rainfed_output_name,
-    units = fao_area_units,
+  rainfed_area_var <- ncdf4::ncvar_def(
+    name = LandInG_setup$landuse$rainfed_output_name,
+    units = LandInG_setup$landuse$fao_area_units,
     dim = list(lon_dim, lat_dim, crop_dim, time_dim),
     longname = "rainfed harvested area",
     missval = 1e30,
@@ -425,9 +440,9 @@ for (chunk in seq_along(chunk_start)) {
     prec = "double",
     compression = 5 # NetCDF compression to reduce file size
   )
-  irrigated_area_var <- ncvar_def(
-    name = irrigated_output_name,
-    units = fao_area_units,
+  irrigated_area_var <- ncdf4::ncvar_def(
+    name = LandInG_setup$landuse$irrigated_output_name,
+    units = LandInG_setup$landuse$fao_area_units,
     dim = list(lon_dim, lat_dim, crop_dim, time_dim),
     longname = "irrigated harvested area",
     missval = 1e30,
@@ -436,9 +451,9 @@ for (chunk in seq_along(chunk_start)) {
     compression = 5 # NetCDF compression to reduce file size
   )
   # Sum over all crops
-  rainfed_sum_var <- ncvar_def(
-    name = rainfed_output_sum_name,
-    units = fao_area_units,
+  rainfed_sum_var <- ncdf4::ncvar_def(
+    name = LandInG_setup$landuse$rainfed_output_sum_name,
+    units = LandInG_setup$landuse$fao_area_units,
     dim = list(lon_dim, lat_dim, time_dim),
     longname = "sum of rainfed harvested areas over all crops",
     missval = 1e30,
@@ -446,9 +461,9 @@ for (chunk in seq_along(chunk_start)) {
     prec = "double",
     compression = 5 # NetCDF compression to reduce file size
   )
-  irrigated_sum_var <- ncvar_def(
-    name = irrigated_output_sum_name,
-    units = fao_area_units,
+  irrigated_sum_var <- ncdf4::ncvar_def(
+    name = LandInG_setup$landuse$irrigated_output_sum_name,
+    units = LandInG_setup$landuse$fao_area_units,
     dim = list(lon_dim, lat_dim, time_dim),
     longname = "sum of irrigated harvested areas over all crops",
     missval = 1e30,
@@ -456,9 +471,9 @@ for (chunk in seq_along(chunk_start)) {
     prec = "double",
     compression = 5 # NetCDF compression to reduce file size
   )
-  total_sum_var <- ncvar_def(
-    name = total_output_sum_name,
-    units = fao_area_units,
+  total_sum_var <- ncdf4::ncvar_def(
+    name = LandInG_setup$landuse$total_output_sum_name,
+    units = LandInG_setup$landuse$fao_area_units,
     dim = list(lon_dim, lat_dim, time_dim),
     longname = c(
       "sum of total (rainfed + irrigated) harvested areas over all crops"
@@ -470,20 +485,22 @@ for (chunk in seq_along(chunk_start)) {
   )
   # Filename of newly generated aggregated time series file
   harvested_area_group_filename <- paste0(
-    basename(aggregated_timeseries_filename_base), "_",
+    basename(LandInG_setup$landuse$aggregated_timeseries_filename_base), "_",
     chunk_start[chunk], "-", chunk_end[chunk],
     file_version_string,
     ".nc"
   )
   # Create file if it does not exist yet
-  if (!file.exists(
-    file.path(
-      dirname(aggregated_timeseries_filename_base),
-      harvested_area_group_filename
-    ))
+  if (
+    !file.exists(
+      file.path(
+        dirname(LandInG_setup$landuse$aggregated_timeseries_filename_base),
+        harvested_area_group_filename
+      )
+    )
   ) {
     # Status variable
-    year_processed_var <- ncvar_def(
+    year_processed_var <- ncdf4::ncvar_def(
       name = "year_processed",
       units = "",
       dim = time_dim,
@@ -495,15 +512,15 @@ for (chunk in seq_along(chunk_start)) {
       "Creating",
       sQuote(
         file.path(
-          dirname(aggregated_timeseries_filename_base),
+          dirname(LandInG_setup$landuse$aggregated_timeseries_filename_base),
           harvested_area_group_filename
         )
       ),
       "\n"
     )
-    harvested_area_group_file <- nc_create(
+    harvested_area_group_file <- ncdf4::nc_create(
       filename = file.path(
-        dirname(aggregated_timeseries_filename_base),
+        dirname(LandInG_setup$landuse$aggregated_timeseries_filename_base),
         harvested_area_group_filename
       ),
       vars = list(# list of variables created in file
@@ -520,36 +537,39 @@ for (chunk in seq_along(chunk_start)) {
     # Set initial values
     # Set years that have finished processing
     year_processed <- rep(0, time_dim$len)
-    ncvar_put(
+    ncdf4::ncvar_put(
       nc = harvested_area_group_file,
       varid = "year_processed",
       vals = year_processed,
       count = length(year_processed)
     )
     # Set crop names
-    ncvar_put(
+    ncdf4::ncvar_put(
       nc = harvested_area_group_file,
       varid = "crop",
-      vals = sort(unique(crop_aggregation_types$LPJmL_name))
+      vals = sort(
+        unique(LandInG_setup$landuse$crop_aggregation_types$LPJmL_name)
+      )
     )
-    nc_close(harvested_area_group_file)
-  } else if (any(
-    (start_year:end_year) %in% (chunk_start[chunk]:chunk_end[chunk])
-  )) {
+
+    ncdf4::nc_close(harvested_area_group_file)
+  } else if (
+    any(seq(start_year, end_year) %in% seq(chunk_start[chunk], chunk_end[chunk]))
+  ) {
     # Re-use existing file but check first
     cat(
       "Trying to re-use previously created",
       sQuote(
         file.path(
-          dirname(aggregated_timeseries_filename_base),
+          dirname(LandInG_setup$landuse$aggregated_timeseries_filename_base),
           harvested_area_group_filename
         )
       ),
       "\n"
     )
-    harvested_area_group_file <- nc_open(
+    harvested_area_group_file <- ncdf4::nc_open(
       filename = file.path(
-        dirname(aggregated_timeseries_filename_base),
+        dirname(LandInG_setup$landuse$aggregated_timeseries_filename_base),
         harvested_area_group_filename
       )
     )
@@ -565,8 +585,8 @@ for (chunk in seq_along(chunk_start)) {
       )
     }
     if (lon_dim$len != harvested_area_group_file$dim$lon$len ||
-      lat_dim$len != harvested_area_group_file$dim$lat$len ||
-      crop_dim$len != harvested_area_group_file$dim$crop$len
+        lat_dim$len != harvested_area_group_file$dim$lat$len ||
+        crop_dim$len != harvested_area_group_file$dim$crop$len
     ) {
       stop(
         "Dimensions of ", sQuote(harvested_area_group_file$filename),
@@ -574,18 +594,21 @@ for (chunk in seq_along(chunk_start)) {
         "File will be recreated if you delete the existing one."
       )
     }
-    if (any(
-      ncvar_get(harvested_area_group_file, "crop") !=
-      sort(unique(crop_aggregation_types$LPJmL_name))
-    )) {
+    if (
+      any(
+        ncdf4::ncvar_get(harvested_area_group_file, "crop") !=
+          sort(unique(LandInG_setup$landuse$crop_aggregation_types$LPJmL_name))
+      )
+    ) {
       stop(
         "Crop names in ", sQuote(harvested_area_group_file$filename),
         " do not match script run.\n",
         "File will be recreated if you delete the existing one."
       )
     }
-    if (harvested_area_group_file$dim$time$units != time_dim$units ||
-      any(harvested_area_group_file$dim$time$vals != time_dim$vals)
+    if (
+      harvested_area_group_file$dim$time$units != time_dim$units ||
+        any(harvested_area_group_file$dim$time$vals != time_dim$vals)
     ) {
       stop(
         "Time axis in ", sQuote(harvested_area_group_file$filename),
@@ -593,7 +616,7 @@ for (chunk in seq_along(chunk_start)) {
         "File will be recreated if you delete the existing one."
       )
     }
-    nc_close(harvested_area_group_file)
+    ncdf4::nc_close(harvested_area_group_file)
   }
 }
 rm(input_timeseries_file, harvested_area_group_file)
@@ -603,38 +626,51 @@ rm(input_timeseries_file, harvested_area_group_file)
 ## Process timeseries from start_year to end_year                             ##
 all_crops <- TRUE
 double_crops <- FALSE
-for (year in start_year:end_year) {
-  if (year %in% input_timeseries_fileyears[, "start"] ||
-    !exists("input_timeseries_file")
+for (year in seq(start_year, end_year)) {
+  if (
+    year %in% input_timeseries_fileyears[, "start"] ||
+      !exists("input_timeseries_file")
   ) {
     # Open one of the input files
     fileindex <- which(
       input_timeseries_fileyears[, "start"] <= year &
       input_timeseries_fileyears[, "end"] >= year
     )
-    input_timeseries_file <- nc_open(
+    input_timeseries_file <- ncdf4::nc_open(
       filename = file.path(
-        dirname(ha_timeseries_filename_base),
+        dirname(LandInG_setup$landuse$ha_timeseries_filename_base),
         input_timeseries_filenames[fileindex]
       )
     )
-    year_processed_input <- ncvar_get(input_timeseries_file, "year_processed")
-    year_input <- input_timeseries_file$dim$time$vals + min(output_period)
-    crops_input <- ncvar_get(input_timeseries_file, "crop")
+    year_processed_input <- ncdf4::ncvar_get(
+      input_timeseries_file,
+      "year_processed"
+    )
+    year_input <- input_timeseries_file$dim$time$vals +
+      min(LandInG_setup$landuse$output_period)
+    crops_input <- ncdf4::ncvar_get(input_timeseries_file, "crop")
     cat("Input file:", input_timeseries_file$filename, "\n")
-    if (!all(crops_input %in% crop_aggregation_types[, "FAOSTAT_name"])) {
+    if (
+      !all(
+        crops_input %in%
+          LandInG_setup$landuse$crop_aggregation_types[, "FAOSTAT_name"]
+      )
+    ) {
       # Print this message only once
       if (all_crops) {
         warning(
           length(
-            which(!crops_input %in% crop_aggregation_types[, "FAOSTAT_name"])
+            which(
+              !crops_input %in%
+                LandInG_setup$landuse$crop_aggregation_types[, "FAOSTAT_name"]
+            )
           ),
           " crop(s) from ", sQuote(input_timeseries_file$filename), "(",
           toString(
             sQuote(
               setdiff(
                 crops_input,
-                crop_aggregation_types[, "FAOSTAT_name"]
+                LandInG_setup$landuse$crop_aggregation_types[, "FAOSTAT_name"]
               )
             )
           ),
@@ -652,24 +688,25 @@ for (year in start_year:end_year) {
     # Open one of the output files
     chunk <- which(chunk_start <= year & chunk_end >= year)
     harvested_area_group_filename <- paste0(
-      basename(aggregated_timeseries_filename_base), "_",
+      basename(LandInG_setup$landuse$aggregated_timeseries_filename_base), "_",
       chunk_start[chunk], "-", chunk_end[chunk],
       file_version_string,
       ".nc"
     )
-    harvested_area_group_file <- nc_open(
+    harvested_area_group_file <- ncdf4::nc_open(
       filename = file.path(
-        dirname(aggregated_timeseries_filename_base),
+        dirname(LandInG_setup$landuse$aggregated_timeseries_filename_base),
         harvested_area_group_filename
       ),
       write = TRUE
     )
-    year_processed_output <- ncvar_get(
+    year_processed_output <- ncdf4::ncvar_get(
       harvested_area_group_file,
       "year_processed"
     )
-    group_crops <- ncvar_get(harvested_area_group_file, "crop")
-    year_output <- harvested_area_group_file$dim$time$vals + min(output_period)
+    group_crops <- ncdf4::ncvar_get(harvested_area_group_file, "crop")
+    year_output <- harvested_area_group_file$dim$time$vals +
+      min(LandInG_setup$landuse$output_period)
     cat("Output file:", harvested_area_group_file$filename, "\n")
   }
   # Skip any years that may have been processed in previous script run
@@ -680,14 +717,12 @@ for (year in start_year:end_year) {
       " because it is marked as already processed in ",
       sQuote(harvested_area_group_file$filename)
     )
-    if ((year %in% input_timeseries_fileyears[, "end"]) ||
-      year == end_year
-    ) {
-      nc_close(input_timeseries_file)
+    if ((year %in% input_timeseries_fileyears[, "end"]) || year == end_year) {
+      ncdf4::nc_close(input_timeseries_file)
       rm(input_timeseries_file)
     }
     if ((year %in% chunk_end) || year == end_year) {
-      nc_close(harvested_area_group_file)
+      ncdf4::nc_close(harvested_area_group_file)
       rm(harvested_area_group_file)
     }
     # Skip to next year
@@ -705,17 +740,21 @@ for (year in start_year:end_year) {
     # Variables for sums across crops grouped under that CFT
     year_rainfed_cft <- year_irrigated_cft <- double(lon_dim$len * lat_dim$len)
     # Indices of crops grouped under that CFT
-    index <- which(crop_aggregation_types[, "LPJmL_name"] == cft)
-    for (crop in crop_aggregation_types[index, "FAOSTAT_name"]) {
-      crop_rainfed <- ncvar_get(
+    index <- which(
+      LandInG_setup$landuse$crop_aggregation_types[, "LPJmL_name"] == cft
+    )
+    for (
+      crop in LandInG_setup$landuse$crop_aggregation_types[index, "FAOSTAT_name"]
+    ) {
+      crop_rainfed <- ncdf4::ncvar_get(
         nc = input_timeseries_file,
-        varid = rainfed_output_name,
+        varid = LandInG_setup$landuse$rainfed_output_name,
         start = c(1, 1, which(crops_input == crop), which(year_input == year)),
         count = c(-1, -1, 1, 1)
       )
-      crop_irrigated <- ncvar_get(
+      crop_irrigated <- ncdf4::ncvar_get(
         nc = input_timeseries_file,
-        varid = irrigated_output_name,
+        varid = LandInG_setup$landuse$irrigated_output_name,
         start = c(1, 1, which(crops_input == crop), which(year_input == year)),
         count = c(-1, -1, 1, 1)
       )
@@ -727,16 +766,16 @@ for (year in start_year:end_year) {
     year_rainfed_sum <- year_rainfed_sum + year_rainfed_cft
     year_irrigated_sum <- year_irrigated_sum + year_irrigated_cft
     # Write CFT to NetCDF
-    ncvar_put(
+    ncdf4::ncvar_put(
       nc = harvested_area_group_file,
-      varid = rainfed_output_name,
+      varid = LandInG_setup$landuse$rainfed_output_name,
       vals = c(year_rainfed_cft),
       start = c(1, 1, which(group_crops == cft), which(year_output == year)),
       count = c(-1, -1, 1, 1)
     )
-    ncvar_put(
+    ncdf4::ncvar_put(
       nc = harvested_area_group_file,
-      varid = irrigated_output_name,
+      varid = LandInG_setup$landuse$irrigated_output_name,
       vals = c(year_irrigated_cft),
       start = c(1, 1, which(group_crops == cft), which(year_output == year)),
       count = c(-1, -1, 1, 1)
@@ -760,18 +799,18 @@ for (year in start_year:end_year) {
   for (sums in c("rainfed", "irrigated", "total")) {
     if (!double_crops) {
       # Compare with sums from source file only if !double_crops
-      tmpsum <- ncvar_get(
+      tmpsum <- ncdf4::ncvar_get(
         nc = input_timeseries_file,
-        varid = get(paste0(sums, "_output_sum_name")),
+        varid = LandInG_setup$landuse[[paste0(sums, "_output_sum_name")]],
         start = c(1, 1, which(year_input == year)),
         count = c(-1, -1, 1)
       )
-      if (max(
-        abs(tmpsum - get(paste0("year_", sums, "_sum"))),
-        na.rm = TRUE
-      ) > 1e-4) {
+      if (
+        max(abs(tmpsum - get(paste0("year_", sums, "_sum"))), na.rm = TRUE) >
+          1e-4
+      ) {
         warning(
-          get(paste0(sums, "_output_sum_name")),
+          LandInG_setup$landuse[[paste0(sums, "_output_sum_name")]],
           " from ", sQuote(input_timeseries_file$filename),
           " differs from ", paste0("year_", sums, "_sum"),
           " computed from aggregated crop groups.",
@@ -781,16 +820,16 @@ for (year in start_year:end_year) {
       }
     }
     # Write sum to file
-    ncvar_put(
+    ncdf4::ncvar_put(
       nc = harvested_area_group_file,
-      varid = get(paste0(sums, "_output_sum_name")),
+      varid = LandInG_setup$landuse[[paste0(sums, "_output_sum_name")]],
       vals = c(get(paste0("year_", sums, "_sum"))),
       start = c(1, 1, which(year_output == year)),
       count = c(-1, -1, 1)
     )
   }
   # Set year as fully processed
-  ncvar_put(
+  ncdf4::ncvar_put(
     nc = harvested_area_group_file,
     varid = "year_processed",
     vals = 1,
@@ -798,24 +837,22 @@ for (year in start_year:end_year) {
     count = 1
   )
   # Make sure that all data is written to file; clear buffers
-  nc_sync(harvested_area_group_file)
+  ncdf4::nc_sync(harvested_area_group_file)
   # Read year_processed_output from file in case of several processes accessing
   # the same file. Note: We advise against running several tasks with
   # overlapping time periods at the same time.
-  year_processed_output <- ncvar_get(
+  year_processed_output <- ncdf4::ncvar_get(
     nc = harvested_area_group_file,
     varid = "year_processed"
   )
 
   # Clean up
-  if (year %in% input_timeseries_fileyears[, "end"] ||
-    year == end_year
-  ) {
-    nc_close(input_timeseries_file)
+  if (year %in% input_timeseries_fileyears[, "end"] || year == end_year) {
+    ncdf4::nc_close(input_timeseries_file)
     rm(input_timeseries_file)
   }
   if (year %in% chunk_end || year == end_year) {
-    nc_close(harvested_area_group_file)
+    ncdf4::nc_close(harvested_area_group_file)
     rm(harvested_area_group_file)
   }
 }

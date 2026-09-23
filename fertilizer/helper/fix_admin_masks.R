@@ -18,7 +18,9 @@
 ## List with additional codes for GADM units                                  ##
 # Check for Taiwan and a few other ISO codes from GADM data in UNSD
 # country_group_data. If not present, add to listing.
-add_list_gadm <- rbind(
+if (!exists("LandInG_setup"))
+  LandInG_setup <- new.env()
+LandInG_setup$fertilizer$add_list_gadm <- rbind(
   # Use China as template for Taiwan (development status, world regions)
   data.frame(
     name = "Taiwan", m49 = 158, iso2 = "TW", iso3 = "TWN", template = "CHN"
@@ -45,7 +47,7 @@ add_list_gadm <- rbind(
 ## Optional data.frame with ISO code replacements. Use this if you cannot add ##
 ## and ISO code to the list above and want to replace it with another ISO code##
 ## that is in the admin dataset.                                              ##
-ccode_replacement_gadm <- rbind(
+LandInG_setup$fertilizer$ccode_replacement_gadm <- rbind(
   # Dummy row illustrating format
   data.frame(source = character(0), replacement = character(0)),
   # Add any replacement rules here.
@@ -59,7 +61,7 @@ ccode_replacement_gadm <- rbind(
 ## listing using regions and development status for China. Also add           ##
 ## definitions of former countries used in LUH2.                              ##
 ## Column "m49" refers to country code used in LUH2.                          ##
-add_list_luh2 <- rbind(
+LandInG_setup$fertilizer$add_list_luh2 <- rbind(
   # Use China as template for Taiwan (development status, regions)
   data.frame(
     name = "Taiwan", m49 = 158, iso2 = "TW", iso3 = "TWN", template = "CHN"
@@ -97,7 +99,7 @@ add_list_luh2 <- rbind(
 ## country group listing.                                                     ##
 ## Set a new valid code to allow associating countries with country groups.   ##
 ## Use only if you cannot add country to list in step above.                  ##
-ccode_replacement_luh2 <- rbind(
+LandInG_setup$fertilizer$ccode_replacement_luh2 <- rbind(
   # Single cell on Canadian/US border, assign to Canada
   data.frame(source = 125, replacement = 124),
   # LUH2 has separate code for Alaska, assign to USA.

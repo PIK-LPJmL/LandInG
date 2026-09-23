@@ -43,9 +43,9 @@ add_to_country_list <- function(country_data, add_data) {
     return(country_data)
   for (r in seq_len(nrow(add_data))) {
     if (add_data[r, "name"] %in% country_data[, name_col] ||
-      add_data[r, "m49"] %in% country_data[, m49_col] || 
-      add_data[r, "iso2"] %in% country_data[, iso2_col] ||
-      add_data[r, "iso3"] %in% country_data[, iso3_col]
+        add_data[r, "m49"] %in% country_data[, m49_col] ||
+        add_data[r, "iso2"] %in% country_data[, iso2_col] ||
+        add_data[r, "iso3"] %in% country_data[, iso3_col]
     ) {
       name_match <- match(add_data[r, "name"], country_data[, name_col])
       code_match <- match(add_data[r, "m49"], country_data[, m49_col])
@@ -70,7 +70,7 @@ add_to_country_list <- function(country_data, add_data) {
       template_row <- match(add_data[r, "template"], country_data[, iso3_col])
       template_data <- country_data[template_row, ]
       # Replace with final values
-      template_data[, c(name_col, m49_col, iso2_col, iso3_col)] <- 
+      template_data[, c(name_col, m49_col, iso2_col, iso3_col)] <-
         add_data[r, c("name", "m49", "iso2", "iso3")]
       # Add row to country_data
       country_data <- rbind(

@@ -38,18 +38,18 @@ load_ha_yeardata <- function(year,
                              file_raster,
                              vars_req,
                              area_raster,
-                             target_unit = fao_area_units,
-                             target_raster = cft_raster,
+                             target_unit,
+                             target_raster,
                              target_varname,
                              fact
                             ) {
   file_index <- which(
     file_startyears <= year &
-    file_endyears >= year
+      file_endyears >= year
   )
   # Load names of crops available in NetCDF source file
   nc <- file_list[[file_index]]
-  file_bandnames <- ncvar_get(nc = nc, varid = "crop")
+  file_bandnames <- ncdf4::ncvar_get(nc = nc, varid = "crop")
   ## Find year in source file
   refyear <- as.integer(
     format.Date(gsub("days|years since ", "", nc$dim$time$units), "%Y")
@@ -67,7 +67,7 @@ load_ha_yeardata <- function(year,
     dimnames = list(NULL, NULL, file_bandnames, vars_req)
   )
   for (v in vars_req) {
-    file_yeardata[, , , v] <- ncvar_get(
+    file_yeardata[, , , v] <- ncdf4::ncvar_get(
       nc = nc,
       varid = v,
       start = c(1, 1, 1, file_yearindex),
@@ -76,7 +76,7 @@ load_ha_yeardata <- function(year,
   }
   # Check whether latitude dimension has correct orientation
   lats <- nc$dim$lat$vals
-  raster_lats <- yFromRow(file_raster)
+  raster_lats <- terra::yFromRow(file_raster)
   file_flip <- (
     (lats[1] < lats[2]) != (raster_lats[1] < raster_lats[2])
   )
@@ -95,34 +95,44 @@ load_ha_yeardata <- function(year,
   # Convert source unit to output unit
   for (v in vars_req) {
     unit <- nc$var[[v]]$units
-    if (!ud.are.convertible(unit, "m2")) {
+    if (!units::ud_are_convertible(unit, "m2")) {
       # Source unit is fractional, use area raster to convert to absolute area
       cat(
         "Convert", sQuote(v), "in", sQuote(target_varname), "from",
         sQuote(unit), "to", sQuote(target_unit), "\n"
       )
+      # Confirm correct unit of area_raster
+      if (
+        !units::ud_are_convertible(terra::units(area_raster), target_unit) ||
+          units::ud_convert(1, terra::units(area_raster), target_unit) != 1
+      ) {
+        stop(
+          "Unit of area_raster ", sQuote(terra::units(area_raster)),
+          " does not match target_unit ", sQuote(target_unit)
+        )
+      }
       file_yeardata[, , , v] <- file_yeardata[, , , v] *
-      ud.convert(1, unit, "1") * values(area_raster)
+        units::ud_convert(1, unit, "1") * ul(terra::values(area_raster))
     } else {
       # Source has absolute area, convert to output unit
-      if (ud.convert(1, unit, target_unit) != 1) {
+      if (units::ud_convert(1, unit, target_unit) != 1) {
         cat(
           "Convert", sQuote(v), "in", sQuote(target_varname), "from",
           sQuote(unit), "to", sQuote(target_unit), "\n"
         )
         file_yeardata[, , , v] <- file_yeardata[, , , v] *
-        ud.convert(1, unit, target_unit)
+          units::ud_convert(1, unit, target_unit)
       }
     }
   }
   # Crop to CFT spatial extent
   crop_x <- which(
-    xFromCol(file_raster) > xmin(target_raster) &
-    xFromCol(file_raster) < xmax(target_raster)
+    terra::xFromCol(file_raster) > terra::xmin(target_raster) &
+      terra::xFromCol(file_raster) < terra::xmax(target_raster)
   )
   crop_y <- which(
-    yFromRow(file_raster) > ymin(target_raster) &
-    yFromRow(file_raster) < ymax(target_raster)
+    terra::yFromRow(file_raster) > terra::ymin(target_raster) &
+      terra::yFromRow(file_raster) < terra::ymax(target_raster)
   )
   file_yeardata <- file_yeardata[crop_x, crop_y, , ]
   if (any(dim(file_yeardata)[1:2] / fact != dim(target_raster)[2:1])) {
@@ -144,9 +154,9 @@ load_ha_yeardata <- function(year,
   if (max(fact) > 1) {
     cat(
       "Aggregating ", sQuote(target_varname), " from [",
-      toString(round(res(file_raster), 8)),
+      toString(round(terra::res(file_raster), 8)),
       "] to output resolution [",
-      toString(round(res(target_raster), 8)),
+      toString(round(terra::res(target_raster), 8)),
       "]\n",
       sep = ""
     )
@@ -196,8 +206,8 @@ load_ha_yeardata <- function(year,
   }
   # Dissolve longitude and latitude dimension to use cft_raster_gridindex
   indexed_dim <- c(
-    prod(dim(file_yeardata)[1:2]),
-    dim(file_yeardata)[-c(1:2)]
+    prod(dim(file_yeardata)[seq_len(2)]),
+    dim(file_yeardata)[-seq_len(2)]
   )
   indexed_dimnames <- dimnames(file_yeardata)[-1]
   dim(file_yeardata) <- indexed_dim

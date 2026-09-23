@@ -8,27 +8,26 @@
 ################################################################################
 
 ################################################################################
-## This utility function can be used on multi-band raster objects to return   ##
-## the band with the smallest number of unique values. For admin unit datasets##
-## it is assumed that the band with the smallest number of unique values      ##
+## This utility function can be used on multi-band raster data to return the  ##
+## band with the smallest number of unique values. For admin unit datasets it ##
+## is assumed that the band with the smallest number of unique values         ##
 ## represents national admin units.                                           ##
 ## Parameters:                                                                ##
-## unit_raster: RasterBrick or RasterLayer object                             ##
+## unit_raster: SpatRaster object                                             ##
 ##                                                                            ##
 ## Returns band index.                                                        ##
 ################################################################################
 find_national_band <- function(unit_raster) {
-  if (nlayers(unit_raster) == 1)
+  if (terra::nlyr(unit_raster) == 1)
     return(1)
   # Find number of unique values in each band
-  band_nunits <- sapply(
-    cellStats(unit_raster, unique),
-    length
+  band_nunits <- unlist(
+    terra::global(unit_raster, function(x) length(unique(x)))
   )
   # Check if bands have same number of unique values.
   if (any(table(band_nunits) > 1) &&
-    band_nunits[which.min(band_nunits)] %in%
-    band_nunits[which(table(band_nunits) > 1)]
+      band_nunits[which.min(band_nunits)] %in%
+        band_nunits[which(table(band_nunits) > 1)]
   ) {
     # Several bands have same number of admin units. Cannot detect country layer
     stop("Cannot reliably detect country layer in unit_raster")

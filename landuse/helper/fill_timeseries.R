@@ -61,18 +61,18 @@ fill_timeseries <- function(harv_areas,
   }
   # Check that variables are named.
   if (min(nchar(names(harv_areas))) < 1 ||
-    !is.finite(min(nchar(names(harv_areas))))
+      !is.finite(min(nchar(names(harv_areas))))
   ) {
     stop("Please make sure that harv_areas is named using the years as strings")
   }
   if (min(nchar(names(cropland))) < 1 ||
-    !is.finite(min(nchar(names(cropland))))
+      !is.finite(min(nchar(names(cropland))))
   ) {
     stop("Please make sure that cropland is named using the years as strings")
   }
   # Check if any gap-filling is necessary.
   if (length(which(is.na(harv_areas))) == 0 &&
-    length(setdiff(names(cropland), names(harv_areas))) == 0
+      length(setdiff(names(cropland), names(harv_areas))) == 0
   ) {
     # Exit function if there are no NAs and if cropland timeseries is not
     # longer than harvested areas timeseries.
@@ -84,7 +84,7 @@ fill_timeseries <- function(harv_areas,
 
   # Check if cropland has years not included in harv_areas.
   if (length(setdiff(names(cropland), names(harv_areas))) > 0 &&
-    extend_timeseries
+      extend_timeseries
   ) {
     # Add empty years to harvested area timeseries if cropland timeseries is
     # longer.
@@ -144,11 +144,14 @@ fill_timeseries <- function(harv_areas,
         # Total cropland change between valid years
         inc <- (cropland[interpolation_target] - cropland[next_NA - 1])
         # Year counter from last valid year
-        ycount <- (as.integer(fillyears) -
-          as.integer(names(cropland)[next_NA - 1]))
+        ycount <- (
+          as.integer(fillyears) - as.integer(names(cropland)[next_NA - 1])
+        )
         # Total number of years between valid values
-        ysum <- (as.integer(names(cropland)[interpolation_target]) -
-          as.integer(names(cropland)[next_NA - 1]))
+        ysum <- (
+          as.integer(names(cropland)[interpolation_target]) -
+            as.integer(names(cropland)[next_NA - 1])
+        )
         cropland[fillyears] <- cbase + inc * ycount / ysum
         # Find next NA value after valid value.
         if (anyNA(cropland)) {
@@ -194,7 +197,7 @@ fill_timeseries <- function(harv_areas,
   # First non-NA value
   first_valid <- min(which(!is.na(harv_areas)))
   if (first_valid > 1 && is.finite(first_valid) &&
-    !is.na(cropland[names(harv_areas)[first_valid]])
+      !is.na(cropland[names(harv_areas)[first_valid]])
   ) {
     # Extend at beginning.
     # This uses a constant crop intensity.
@@ -274,7 +277,7 @@ fill_timeseries <- function(harv_areas,
         }
       } else {
         if (is.na(cropland[names(harv_areas)[next_NA - 1]]) ||
-          cropland[names(harv_areas)[next_NA - 1]] == 0
+            cropland[names(harv_areas)[next_NA - 1]] == 0
         ) {
           # Cannot use starting harv_areas/cropland factor for interpolation.
           start_cropland <- FALSE
@@ -432,9 +435,9 @@ fill_timeseries <- function(harv_areas,
     }
   }
   if (extend_timeseries) {
-    return(harv_areas)
+    harv_areas
   } else {
     # Remove any additional years introduced in time series.
-    return(harv_areas[saved_yseq])
+    harv_areas[saved_yseq]
   }
 }

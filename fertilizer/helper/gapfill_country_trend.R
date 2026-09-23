@@ -45,6 +45,9 @@ gapfill_country_trend <- function(data_ts,
   if (!country_grouping_col %in% colnames(country_grouping)) {
     stop("Invalid country_grouping_col ", sQuote(country_grouping_col))
   }
+  if (is.null(names(dim(data_ts)))) {
+    stop("Expecting named dimensions in data_ts")
+  }
   if (!identical(dimnames(data_ts), dimnames(data_level))) {
     stop("Dimension inconsistency between data_ts and data_level")
   }
@@ -91,13 +94,13 @@ gapfill_country_trend <- function(data_ts,
     # Check that all or no countries have global_fill_code in each year
     any_global <- apply(
       data_level,
-      1,
+      "time",
       function(indata, needle) any(indata %in% needle, na.rm = TRUE),
       needle = global_fill_code
     )
     all_global <- apply(
       data_level,
-      1,
+      "time",
       function(indata, needle) all(indata %in% needle, na.rm = TRUE),
       needle = global_fill_code
     )
@@ -106,29 +109,35 @@ gapfill_country_trend <- function(data_ts,
     }
   }
   # Check if countries need to be added
-  add_list <- setdiff(add_list, dimnames(data_ts)[[2]])
+  add_list <- setdiff(add_list, dimnames(data_ts)[["country"]])
   if (length(add_list) > 0) {
+    n <- names(dim(data_ts))
     data_ts <- cbind(
       data_ts,
       array(
         dim = c(nrow(data_ts), length(add_list)),
-        dimnames = list(dimnames(data_ts)[[1]], add_list)
+        dimnames = list(dimnames(data_ts)[["time"]], add_list)
       )
     )
     data_level <- cbind(
       data_level,
       array(
         dim = c(nrow(data_level), length(add_list)),
-        dimnames = list(dimnames(data_level)[[1]], add_list)
+        dimnames = list(dimnames(data_level)[["time"]], add_list)
       )
     )
     data_sources <- cbind(
       data_sources,
       array(
         dim = c(nrow(data_sources), length(add_list)),
-        dimnames = list(dimnames(data_sources)[[1]], add_list)
+        dimnames = list(dimnames(data_sources)[["time"]], add_list)
       )
     )
+    dn <- dimnames(data_ts)
+    names(dn) <- n
+    names(dim(data_ts)) <- names(dim(data_level)) <- names(dim(data_sources)) <-
+      names(dn)
+    dimnames(data_ts) <- dimnames(data_level) <- dimnames(data_sources) <- dn
   }
   if (!is.null(global_fill_code)) {
     # Flush fill years with global_fill_code
@@ -136,12 +145,12 @@ gapfill_country_trend <- function(data_ts,
     data_level[which(all_global), add_list] <- global_fill_code
   }
   # Find countries that need gap-filling.
-  gapfill_countries <- apply(data_ts, 2, anyNA)
+  gapfill_countries <- apply(data_ts, "country", anyNA)
   # Only use countries for gap-filling that have not been filled with region
   # values themselves.
   source_countries <- apply(
     data_level,
-    2,
+    "country",
     function(indata, limit, gf) {
       !anyNA(indata) && all(indata <= limit | indata %in% gf, na.rm = TRUE)
     },
@@ -225,7 +234,7 @@ gapfill_country_trend <- function(data_ts,
           sapply(
             region_has_values,
             function(indata) {
-              if(length(indata) >= assign_country_threshold) length(indata)
+              if (length(indata) >= assign_country_threshold) length(indata)
               else NA
             }
           )
@@ -243,7 +252,7 @@ gapfill_country_trend <- function(data_ts,
             group_members_name <- group_iso
           } else {
             group_members_name <-
-            country_grouping[group_members_r, name_col[1]]
+              country_grouping[group_members_r, name_col[1]]
           }
           cat(
             "Using",
@@ -274,7 +283,7 @@ gapfill_country_trend <- function(data_ts,
         # Use median across countries in region group, regardless of country
         # size.
         data_ts[missing_years, isocode] <- apply(
-          data_ts[missing_years, group_iso, drop = FALSE], 1, median
+          data_ts[missing_years, group_iso, drop = FALSE], "time", median
         )
         # Set region level used for gap-filling
         data_level[missing_years, group_iso] <- gapfill_source[reg]

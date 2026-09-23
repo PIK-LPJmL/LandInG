@@ -6,11 +6,14 @@ FAOSTAT is provided by the Food and Agriculture Organization of the United
 Nations (FAO).
 
 ## Input
+
 The data can be downloaded from:
-http://www.fao.org/faostat/en/#data/
+https://www.fao.org/faostat/en/#data/
 
 ## How to use
+
 Download crop production data:
+
 1. Select the Domain `Production` -> `Crops`.
 2. Use `Bulk Download` -> `All Data` in right column (`All Data Normalized`
   has a different structure than what is expected by `../read_FAOSTAT.R`).
@@ -23,6 +26,7 @@ Download crop production data:
   `fao_production_item_group_file`.
 
 Download land use data:
+
 1. Select Domain `Land, Inputs and Sustainability` -> `Land` -> `Land Use`.
 2. Use `Bulk Download` -> `All Data` in right column (`All Data Normalized`
   has a different structure than what is expected by `../read_FAOSTAT.R`).

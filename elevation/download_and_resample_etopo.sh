@@ -52,7 +52,9 @@ etopo1_tgt_name="ETOPO1_resampled_"${xres}"_by_"${yres}".nc"
 ################################################################################
 ## On PIK cluster load GMT module. This is probably not necessary in other    ##
 ## software environments.                                                     ##
-module load gmt/6.1.1
+if [ -d /p/system/lenovo/ctt ]; then
+  module load gmt/6.6.0
+fi
 ################################################################################
 
 
@@ -132,7 +134,6 @@ fi
 ## -G: output grid file                                                       ##
 ## -I: outout resolution                                                      ##
 ## -rp: set pixel registration                                                ##
-## -C: use the center of the block as the output location                     ##
 ## -R: derive regional extent from source file                                ##
 if [ $resample_operation == "AGGREGATE" ]; then
   if [ "$aggregation_function" != "blockmean" ] &&  
@@ -145,7 +146,7 @@ if [ $resample_operation == "AGGREGATE" ]; then
   echo Resampling $etopo1_src_local_masked to $etopo1_tgt_name using \
     $aggregation_function aggregation
   gmt grd2xyz $etopo1_src_local_masked | gmt $aggregation_function \
-    -R$etopo1_src_local_unpacked -I${xres}/${yres} -C -rp -G$etopo1_tgt_name
+    -R$etopo1_src_local_unpacked -I${xres}/${yres} -rp -G$etopo1_tgt_name
 else
   echo Resampling $etopo1_src_local_masked to $etopo1_tgt_name
   gmt grdsample $etopo1_src_local_masked -G$etopo1_tgt_name -I${xres}/${yres} -rp

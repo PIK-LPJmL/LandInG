@@ -1,14 +1,13 @@
 #!/bin/bash
 #SBATCH --ntasks=10
-#SBATCH --cpus-per-task=2 # One cpu/task on largemem should be enough at 0.5°, 2 cpus/task on largemem for 5 arcmin
-#SBATCH --partition=largemem # Needs to run on largemem due to large memory requirement
-#SBATCH --qos=medium
+#SBATCH --mem=320G # ~4 GB per task at 0.5° (which is below the default assignment), 32 GB per task at 5 arcmin
+#SBATCH --qos=short
 #SBATCH --export=ALL
 #SBATCH --account=lpjml
 #SBATCH --comment="grid_intersection"
-#SBATCH --output=5_map_districts_to_grid_intersection_%j.out
-#SBATCH --error=5_map_districts_to_grid_intersection_%j.err
-#SBATCH --mail-type=END
+#SBATCH --output=2_map_admin_to_grid_intersection_%j.out
+#SBATCH --error=2_map_admin_to_grid_intersection_%j.err
+#SBATCH --mail-type=END,FAIL
 #SBATCH --job-name=grid_intersection
 
 ################################################################################
@@ -21,15 +20,9 @@
 ################################################################################
 
 ulimit -c unlimited
-export I_MPI_PMI_LIBRARY=/p/system/slurm/lib/libpmi.so
+if [ -d /p/system/lenovo/ctt ]; then
+  # Load modules for PIK 2024 high-performance computer
+  source ../R_env_PIK.sh
+fi
 
-module load R/3.6.2
-module load intel/2018.1
-module load geos/3.6.1
-module load proj4/5.2.0
-module load gdal/2.4.0
-module load udunits/2.2.19
-
-export R_LIBS=/p/projects/lpjml/R.3.6.2/library # Must match with R module selected above
-
-srun --propagate R --no-save --file=5_map_districts_to_grid_intersection.R --silent --slave
+mpirun Rscript --vanilla 2_map_admin_to_grid_intersection.R

@@ -32,7 +32,7 @@ ncols <- 4320
 nrows <- 2124
 xllcorner <- -180
 yllcorner <- -88.5
-cellsize <- 1/12
+cellsize <- 1 / 12
 NODATA_value <- -9999
 ################################################################################
 
@@ -47,7 +47,11 @@ nut <- "N"
 # technically supports setting values per nutrient by giving named vectors as
 # manure_* settings.
 data_dir <- file.path(
-  ifelse(length(manure_dir) > 1, manure_dir[nut], manure_dir),
+  ifelse(
+    length(LandInG_setup$fertilizer$manure_dir) > 1,
+    LandInG_setup$fertilizer$manure_dir[nut],
+    LandInG_setup$fertilizer$manure_dir
+  ),
   "ManNitProCrpRd"
 )
 # Data source files. Check that pattern matches the data you downloaded.
@@ -71,62 +75,66 @@ if (length(data_years) != length(seq(min(data_years), max(data_years)))) {
 ################################################################################
 ## Data conversion                                                            ##
 # Set up spatial extent of source data based on ASCII header information above.
-data_extent <- extent(
+data_extent <- terra::ext(
   xllcorner,
   xllcorner + ncols * cellsize,
   yllcorner,
   yllcorner + nrows * cellsize
 )
 # Set up dummy RasterLayer for source data and dummy raster with global extent
-data_raster <- raster(data_extent, res = cellsize)
-global_raster <- raster(global_extent, res = cellsize)
+data_raster <- terra::rast(extent = data_extent, res = cellsize)
+global_raster <- terra::rast(extent = global_extent, res = cellsize)
 # Check if cell boundaries of data_raster and global_raster are aligned
-x <- min(xres(data_raster), xres(global_raster))
-y <- min(yres(data_raster), yres(global_raster))
-if ((abs(xmin(global_raster) - xmin(data_raster)) / x) %% 1 > 0.01 ||
-  (abs(ymin(global_raster) - ymin(data_raster)) / y) %% 1 > 0.01
+x <- min(terra::xres(data_raster), terra::xres(global_raster))
+y <- min(terra::yres(data_raster), terra::yres(global_raster))
+if (
+  (abs(terra::xmin(global_raster) - terra::xmin(data_raster)) / x) %% 1 > 0.01 ||
+    (abs(terra::ymin(global_raster) - terra::ymin(data_raster)) / y) %% 1 > 0.01
 ) {
   stop("Cell boundaries of data_raster and global_raster are mis-aligned")
 }
 
 # Set up NetCDF dimensions and variable
-lon_dim <- ncdim_def(
+lon_dim <- ncdf4::ncdim_def(
   name = "longitude",
   units = "degrees_east",
-  vals = xFromCol(global_raster),
+  vals = terra::xFromCol(global_raster),
   longname = "Longitude"
 )
-lat_dim <- ncdim_def(
+lat_dim <- ncdf4::ncdim_def(
   name = "latitude",
   units = "degrees_north",
-  vals = yFromRow(global_raster),
+  vals = terra::yFromRow(global_raster),
   longname = "Latitude"
 )
-time_dim <- ncdim_def(
+time_dim <- ncdf4::ncdim_def(
   name = "time",
   units = "year",
   vals = sort(data_years),
   unlim = TRUE
 )
-manure_var <- ncvar_def(
+manure_var <- ncdf4::ncvar_def(
   name = paste0("manure_", nut),
   units = ifelse(
-    length(manure_src_unit) > 1,
-    manure_src_name[nut],
-    manure_src_unit
+    length(LandInG_setup$fertilizer$manure_src_unit) > 1,
+    LandInG_setup$fertilizer$manure_src_name[nut],
+    LandInG_setup$fertilizer$manure_src_unit
   ),
   dim = list(lon_dim, lat_dim, time_dim),
-  missval = missval_float, 
+  missval = missval_float,
   longname = paste0(
     "Manure ", nut, " application",
     ifelse(
-      is.null(manure_ref_area) ||
-        (!is.null(names(manure_ref_area)) && !nut %in% names(manure_ref_area)),
+      is.null(LandInG_setup$fertilizer$manure_ref_area) ||
+        (!is.null(names(LandInG_setup$fertilizer$manure_ref_area)) &&
+           !nut %in% names(LandInG_setup$fertilizer$manure_ref_area)),
       "",
       paste(
         " rate on",
         ifelse(
-          length(manure_ref_area) > 1, manure_ref_area[nut], manure_ref_area
+          length(LandInG_setup$fertilizer$manure_ref_area) > 1,
+          LandInG_setup$fertilizer$manure_ref_area[nut],
+          LandInG_setup$fertilizer$manure_ref_area
         )
       )
     )
@@ -141,49 +149,68 @@ fileout_name <- paste0(
 )
 if (
   dirname(
-    ifelse(length(manure_src_name) > 1, manure_src_name[nut], manure_src_name)
+    ifelse(
+      length(LandInG_setup$fertilizer$manure_src_name) > 1,
+      LandInG_setup$fertilizer$manure_src_name[nut],
+      LandInG_setup$fertilizer$manure_src_name
+    )
   ) != "."
 ) {
   fileout_name <- file.path(
     dirname(
-      ifelse(length(manure_src_name) > 1, manure_src_name[nut], manure_src_name)
+      ifelse(
+        length(LandInG_setup$fertilizer$manure_src_name) > 1,
+        LandInG_setup$fertilizer$manure_src_name[nut],
+        LandInG_setup$fertilizer$manure_src_name
+      )
     ),
     fileout_name
   )
 }
 # Check if NetCDF filename matches pattern defined in fertilizer_setup.R
 if (!grepl(
-  ifelse(length(manure_src_name) > 1, manure_src_name[nut], manure_src_name),
+  ifelse(
+    length(LandInG_setup$fertilizer$manure_src_name) > 1,
+    LandInG_setup$fertilizer$manure_src_name[nut],
+    LandInG_setup$fertilizer$manure_src_name
+  ),
   fileout_name
-)) {
+)
+) {
   stop(
-    paste0(
-      "Automatically generated file name fileout_name \n",
-      sQuote(fileout_name),
-      "\ndoes not match pattern defined in fertilizer_setup.R:\n",
-      sQuote(
-        gsub(
-          "\\", "\\\\",
-          ifelse(
-            length(manure_src_name) > 1,
-            manure_src_name[nut],
-            manure_src_name
-          ),
-          fixed = TRUE
-        )
+    "Automatically generated file name fileout_name \n",
+    sQuote(fileout_name),
+    "\ndoes not match pattern defined in fertilizer_setup.R:\n",
+    sQuote(
+      gsub(
+        "\\", "\\\\",
+        ifelse(
+          length(LandInG_setup$fertilizer$manure_src_name) > 1,
+          LandInG_setup$fertilizer$manure_src_name[nut],
+          LandInG_setup$fertilizer$manure_src_name
+        ),
+        fixed = TRUE
       )
     )
   )
 }
 # Create NetCDF file
-fileout_nc <- nc_create(fileout_name, manure_var)
-ncatt_put(
-  fileout_nc,
-  paste0("manure_", nut),
-  "missing_value",
-  missval_float
+fileout_nc <- ncdf4::nc_create(fileout_name, manure_var)
+ncdf4::ncatt_put(
+  nc = fileout_nc,
+  varid = paste0("manure_", nut),
+  attname = "missing_value",
+  attval = missval_float,
+  prec = "float"
 )
-nc_sync(fileout_nc)
+# Save LandInG version number in file.
+ncdf4::ncatt_put(
+  nc = fileout_nc,
+  varid = 0,
+  attname = "LandInG_version",
+  attval = LandInG_setup$LandInG_version
+)
+ncdf4::nc_sync(fileout_nc)
 
 cat(
   "Converting", length(data_files), "files spanning",
@@ -197,7 +224,7 @@ for (findex in seq_along(data_files)) {
     sep = "",
     quiet = TRUE
   )
-  if (length(filevals) != ncell(data_raster)) {
+  if (length(filevals) != terra::ncell(data_raster)) {
     warning(
       "Number of values read from ",
       sQuote(file.path(data_dir, data_files[findex])),
@@ -210,22 +237,22 @@ for (findex in seq_along(data_files)) {
   # Replace missing values in data read from file.
   filevals[which(filevals == NODATA_value)] <- NA
   # Assign values to RasterLayer
-  values(data_raster) <- filevals
+  terra::values(data_raster) <- filevals
   # Expand data_raster to global_extent if necessary. Fill up with missing data
   # value if source data contains cells with missing value. Otherwise, fill up
   # with zero.
-  netcdf_raster <- extend(
+  netcdf_raster <- terra::extend(
     data_raster,
     global_extent,
-    value = ifelse(any(is.na(filevals)), NA, 0)
+    fill = ifelse(any(is.na(filevals)), NA, 0)
   )
   # Save to NetCDF file
-  ncvar_put(
+  ncdf4::ncvar_put(
     fileout_nc,
     paste0("manure_", nut),
-    vals = values(netcdf_raster),
+    vals = terra::values(netcdf_raster, mat = FALSE),
     start = c(1, 1, which(time_dim$vals == data_years[findex])),
     count = c(-1, -1, 1)
   )
 }
-nc_close(fileout_nc)
+ncdf4::nc_close(fileout_nc)

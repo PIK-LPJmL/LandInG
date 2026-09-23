@@ -3,14 +3,18 @@
 This sub-directory contains scripts to process HYDE data.
 
 ## Input
-This README assumes using the latest HYDE version available at the time of
-release: HYDE version 3.2.1.
 
-HYDE website: https://www.pbl.nl/en/image/links/hyde
+This README assumes using HYDE version 3.2.1, which was used in the original
+sample application in [Ostberg et al. (2023)](https://doi.org/10.5194/gmd-16-3375-2023).
+Newer HYDE versions may require changes to parameters `LASTYEAR` and
+`SPLIT_YEAR_ANNUAL` below.
 
-Data portal: https://dataportaal.pbl.nl/downloads/HYDE/
+HYDE website: https://landuse.sites.uu.nl/hyde-project/
+
+Data portal: https://landuse.sites.uu.nl/datasets/
 
 ## Software requirements
+
 - `bash`
 - The scripts `step2_hyde_convert.sh` and `step3_hyde_interpol_merge.sh`
   require Climate Data Operators (`CDO`) and NetCDF Operators (`NCO`):
@@ -18,6 +22,7 @@ Data portal: https://dataportaal.pbl.nl/downloads/HYDE/
   * NCO: http://nco.sourceforge.net/
 
 ## Files included in this directory
+
 - grid.txt: Provides a grid description for a global NetCDF file at 5 arcmin
   spatial resolution, used to convert ASCII grids to NetCDF
 - README.md: This file
@@ -32,18 +37,20 @@ Data portal: https://dataportaal.pbl.nl/downloads/HYDE/
   step 3 on PIK high performance cluster
 
 ## How to use
-1. Download `baseline` and `general_files` of the latest HYDE version from the
-   HYDE data portal.
-2. If the data are zipped, unzip in place, creating sub-directories `baseline`
-   and `general_files`
+
+1. Create sub-directories `baseline` and `general_files`
+2. Download `baseline` and `general_files` of the latest HYDE version from the
+   HYDE data portal and put into sub-directories. For `baseline` files use `zip`
+   version and put zipped individual files into `baseline/zip` sub-directory
 3. Use step1_hyde_unzip.sh
 4. Use step2_hyde_convert.sh
 5. Use step3_hyde_interpol_merge.sh
 
 ## Settings in bash scripts:
+
 - `TYPE`: HYDE groups variables into landuse (lu) and population (pop); select
   which group to process. Default: lu
-- `STARTYEAR`: HYDE data currently cover 10000 BC to 2017; select first year to
+- `STARTYEAR`: HYDE v. 3.2.1 data cover 10000 BC to 2017; select first year to
   process. This should match the `output_period` in `../landuse_setup.R`
 - `LASTYEAR`: Select last year to process. This should match the `output_period`
   in `../landuse_setup.R`. Default: 2017

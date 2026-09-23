@@ -91,14 +91,15 @@ lpjml_capacity_unit <- "km3"
 ## additional information on dam/reservoir status. Additional rules how to    ##
 ## treat such dams/reservoirs can be added. At the moment, actions "drop" and ##
 ## "keep" are supported.                                                      ##
-timeline_action <- c("Destroyed" = "drop",
-                     "Modified" = "keep",
-                     "Planned" = "drop",
-                     "Removed" = "drop",
-                     "Replaced" = "drop",
-                     "Subsumed" = "drop",
-                     "Under construction" = "drop"
-                     )
+timeline_action <- c(
+  "Destroyed" = "drop",
+  "Modified" = "keep",
+  "Planned" = "drop",
+  "Removed" = "drop",
+  "Replaced" = "drop",
+  "Subsumed" = "drop",
+  "Under construction" = "drop"
+)
 ## LPJmL input format settings:                                               ##
 ## Header version: only version 3 supports longitude and latitude resolution  ##
 ## to differ (default: 3)
@@ -121,88 +122,96 @@ manual_assignment <- data.frame(
 
 
 ################################################################################
-## Helper functions for LPJmL input format                                    ##
-## The script lpjml_format_helper_functions.R is saved in the parent          ##
-## directory by default.                                                      ##
+## Helper functions for LPJmL input format and basic LandInG setup.           ##
+## The script landing_setup.R is saved in the parent directory by default.    ##
 ################################################################################
-if (file.exists("../lpjml_format_helper_functions.R")) {
-  source("../lpjml_format_helper_functions.R")
-} else {
-  stop("Please update path to script with LPJmL input format helper function")
+if (file.exists("../landing_setup.R")) {
+  source("../landing_setup.R", chdir = TRUE)
+} else if (!exists("LandInG_setup") || !is.environment(LandInG_setup)) {
+  stop("Please update path to script with LandInG setup script")
 }
 
 ################################################################################
-## Load required R packages. These may need to be installed first.            ##
-library(raster)
-library(foreign)
-library(geosphere)
-library(udunits2)
+## Check for required R packages. These may need to be installed first.       ##
+required_packages <- c("terra", "foreign", "geosphere", "units")
+if (!all(required_packages %in% .packages(all.available = TRUE))) {
+  stop(
+    "Please install missing package(s): ",
+    toString(
+      sQuote(
+        setdiff(required_packages, .packages(all.available = TRUE)),
+        q = FALSE
+      )
+    )
+  )
+}
+
 # The following packages are only used for plotting diagnostics graphics
-library(sf)
+required_packages <- c("sf", "RColorBrewer", "maps")
+if (!all(required_packages %in% .packages(all.available = TRUE))) {
+  stop(
+    "Please install package(s): ",
+    toString(
+      sQuote(
+        setdiff(required_packages, .packages(all.available = TRUE)),
+        q = FALSE
+      )
+    ),
+    ", which is/are required for plotting diagnostics graphics."
+  )
+}
 # Depending on the package version, function st_make_valid() is either available
 # directly in package sf or provided by package lwgeom
-if (!exists("st_make_valid"))
-  library(lwgeom)
-
-library(RColorBrewer)
-library(maps)
+if (!"st_make_valid" %in% getNamespaceExports("sf")) {
+  if (!"lwgeom" %in% .packages(all.available = TRUE)) {
+    stop("Please install missing 'lwgeom' package or update 'sf' package")
+  }
+}
 ################################################################################
 
-# Use simple quotation marks
-options(useFancyQuotes = FALSE)
 
 ################################################################################
 ## Read inputs:                                                               ##
-## LPJmL grid file. Functions read_header(), get_headersize(), get_datatype() ##
-## defined in lpjml_format_helper_functions.R                                 ##
-cat("Reading LPJmL grid from", sQuote(gridname), "\n")
-gridheader <- read_header(gridname)
-gridfile <- file(gridname, "rb")
-# Skip over header
-seek(gridfile, get_headersize(gridheader))
-griddata <- matrix(
-  readBin(
-    gridfile,
-    what = get_datatype(gridheader)$type,
-    size = get_datatype(gridheader)$size,
-    n = gridheader$header["ncell"] * gridheader$header["nbands"],
-    endian = gridheader$endian
-  ) * gridheader$header["scalar"],
-  ncol = gridheader$header["nbands"],
-  byrow = TRUE,
-  dimnames = list(NULL, c("lon", "lat"))
-)
-close(gridfile)
+## LPJmL grid file. Uses functionality from lpjmlkit to work with LPJmL format##
+cat("Reading LPJmL grid from", sQuote(gridname, q = FALSE), "\n")
+gridheader <- lpjmlkit::read_header(gridname, verbose = FALSE)
+griddata <- lpjmlkit::read_grid(gridname)$data
 # Create raster object for upstream area
-gridraster <- raster(
-  xmn = min(griddata[, 1]) - gridheader$header["cellsize_lon"] / 2,
-  xmx = max(griddata[, 1]) + gridheader$header["cellsize_lon"] / 2,
-  ymn = min(griddata[, 2]) - gridheader$header["cellsize_lat"] / 2,
-  ymx = max(griddata[, 2]) + gridheader$header["cellsize_lat"] / 2,
+gridraster <- terra::rast(
+  xmin = min(griddata[, "lon"]) - gridheader$header["cellsize_lon"] / 2,
+  xmax = max(griddata[, "lon"]) + gridheader$header["cellsize_lon"] / 2,
+  ymin = min(griddata[, "lat"]) - gridheader$header["cellsize_lat"] / 2,
+  ymax = max(griddata[, "lat"]) + gridheader$header["cellsize_lat"] / 2,
   resolution = gridheader$header[c("cellsize_lon", "cellsize_lat")]
 )
 # Try to correct numerical inaccuracies of grid settings
-if (all(
-  (1 / gridheader$header[c("cellsize_lon", "cellsize_lat")]) %% 1 < 1e-6 |
-  (1 / gridheader$header[c("cellsize_lon", "cellsize_lat")]) %% 1 > 1 - 1e-6
-)) {
-  res(gridraster) <- 1 /
+if (
+  all(
+    (1 / gridheader$header[c("cellsize_lon", "cellsize_lat")]) %% 1 < 1e-6 |
+      (1 / gridheader$header[c("cellsize_lon", "cellsize_lat")]) %% 1 > 1 - 1e-6
+  )
+) {
+  terra::res(gridraster) <- 1 /
     round(1 / gridheader$header[c("cellsize_lon", "cellsize_lat")])
-  extent(gridraster) <- alignExtent(
-    extent(gridraster),
-    raster(extent(-180, 180, -90, 90), res = res(gridraster))
+  terra::ext(gridraster) <- terra::align(
+    terra::ext(gridraster),
+    terra::rast(
+      terra::ext(c(-180, 180, -90, 90)),
+      resolution = terra::res(gridraster)
+    )
   )
 }
 cat(
   "Grid has", gridheader$header["ncell"],
   "cells with a spatial resolution of",
-  paste(format(res(gridraster), digits = 4), collapse = " by "), "degrees.\n"
+  paste(format(terra::res(gridraster), digits = 4), collapse = " by "),
+  "degrees.\n"
 )
 # Set projection
-proj4string(gridraster) <-
+terra::crs(gridraster) <-
   "+proj=longlat +datum=WGS84 +ellps=WGS84 +towgs84=0,0,0"
 # Assign grid cell indices of LPJmL grid file to raster
-gridraster[cellFromXY(gridraster, griddata)] <-
+gridraster[terra::cellFromXY(gridraster, griddata)] <-
   seq_len(gridheader$header["ncell"])
 # Determine resolution string to be used in files created by this script
 tmp_res <- unique(
@@ -226,29 +235,47 @@ lpj_res_string <- paste(
 )
 rm(tmp_res)
 # Check version compatibility
-if (xres(gridraster) != yres(gridraster) && bintype < 3) {
+if (terra::xres(gridraster) != terra::yres(gridraster) && bintype < 3) {
   stop("Only bintype 3 supports longitude and latitude resolution to differ")
 }
 # Upstream area, as computed by river_routing.R
-cat("Reading pre-computed upstream areas from", sQuote(upstreamarea_RData), "\n")
-load(upstreamarea_RData)
-# Check if grids match
-if (!identical(drainage_griddata, griddata)) {
+cat(
+  "Reading pre-computed upstream areas from",
+  sQuote(upstreamarea_RData, q = FALSE),
+  "\n"
+)
+drainage_env <- new.env()
+load(upstreamarea_RData, envir = drainage_env)
+if (
+  is.null(drainage_env$LandInG_version) ||
+    drainage_env$LandInG_version != LandInG_setup$LandInG_version
+) {
   stop(
-    "LPJmL grid ", sQuote(gridname),
-    " does not match upstream area", sQuote(upstreamarea_RData)
+    sQuote(upstreamarea_RData, q = FALSE),
+    " was created with a previous version of LandInG. ",
+    "Please rerun river_routing.R with current LandInG."
   )
 }
-# Determine unit conversion factors using udunits2 package
-conversion_factor_area <- ud.convert(1, lpjml_area_unit, grand_area_unit)
+# Check if grids match
+if (!identical(drainage_env$griddata, griddata)) {
+  stop(
+    "LPJmL grid ", sQuote(gridname, q = FALSE),
+    " does not match upstream area", sQuote(upstreamarea_RData, q = FALSE)
+  )
+}
+if (!is.null(drainage_env[["upstreamarea"]])) {
+  stop("Upstream area missing in ", sQuote(upstreamarea_RData, q = FALSE))
+}
+# Determine unit conversion factors using units package
+conversion_factor_area <- units::ud_convert(1, lpjml_area_unit, grand_area_unit)
 conversion_factor_capacity <-
-  ud.convert(1, grand_capacity_unit, lpjml_capacity_unit)
+  units::ud_convert(1, grand_capacity_unit, lpjml_capacity_unit)
 # Convert unit of LPJmL upstream areas
-drainage_upstreamarea <- drainage_upstreamarea * conversion_factor_area
+drainage_env$upstreamarea <- drainage_env$upstreamarea * conversion_factor_area
 
 ## GRanD dams attribute table                                                 ##
-cat("Reading GRanD attribute data from", sQuote(grand_name), "\n")
-granddata <- read.dbf(grand_name)
+cat("Reading GRanD attribute data from", sQuote(grand_name, q = FALSE), "\n")
+granddata <- foreign::read.dbf(grand_name)
 grandcols <- c(
   "GRAND_ID",
   "RES_NAME",
@@ -286,10 +313,13 @@ rownames(granddata) <- granddata$GRAND_ID
 # - column CATCH_AREA_LPJ_BEST: upstream area of cell CELL_ID_CATCH
 # - column DIST_LPJ_DAM: distance between dam coordinates and center of
 #   CELL_ID_CATCH
-cindex <- cellFromXY(gridraster, cbind(granddata$LONG_DD, granddata$LAT_DD))
+cindex <- terra::cellFromXY(
+  gridraster,
+  cbind(granddata$LONG_DD, granddata$LAT_DD)
+)
 granddata <- cbind(
   granddata,
-  CELL_ID_GRID = gridraster[cindex],
+  CELL_ID_GRID = unname(gridraster[cindex]),
   CATCH_AREA_LPJ_GRID = rep(NA, nrow(granddata))
 )
 rm(cindex)
@@ -332,7 +362,7 @@ for (dev in deviation_penalty) {
 if (any(is.na(granddata$CELL_ID_GRID))) {
   warning(
     length(which(is.na(granddata$CELL_ID_GRID))),
-    " dams are outside the range of grid file ", sQuote(gridname),
+    " dams are outside the range of grid file ", sQuote(gridname, q = FALSE),
     call. = FALSE,
     immediate. = TRUE
   )
@@ -340,13 +370,13 @@ if (any(is.na(granddata$CELL_ID_GRID))) {
 # Apply rules in timeline_action
 cat("Applying filter rules in 'timeline_action' to GRanD attribute table:\n")
 for (timeline in names(timeline_action)) {
-  cat("Timeline attribute:", sQuote(timeline), "\n")
+  cat("Timeline attribute:", sQuote(timeline, q = FALSE), "\n")
   if (timeline_action[timeline] == "drop") {
     for (r in which(granddata$TIMELINE == timeline)) {
       warning(
         "Dam ", granddata[r, "DAM_NAME"],
         " (", toString(round(granddata[r, coordcols], 2)), ")",
-        " has timeline attribute ", sQuote(granddata$TIMELINE[r]),
+        " has timeline attribute ", sQuote(granddata$TIMELINE[r], q = FALSE),
         " and will be dropped. Review 'timeline_action' if necessary.",
         call. = FALSE,
         immediate. = TRUE
@@ -357,14 +387,14 @@ for (timeline in names(timeline_action)) {
   } else if (timeline_action[timeline] == "keep") {
     message(
       "Info: ", length(which(granddata$TIMELINE == timeline)),
-      " dams have timeline attribute ", sQuote(timeline),
+      " dams have timeline attribute ", sQuote(timeline, q = FALSE),
       " but will be kept regardless. Review 'timeline_action' if necessary."
     )
   } else {
     warning(
       length(which(granddata$TIMELINE == timeline)),
-      " dams have timeline attribute ", sQuote(timeline),
-      " but defined action ", sQuote(timeline_action[timeline]),
+      " dams have timeline attribute ", sQuote(timeline, q = FALSE),
+      " but defined action ", sQuote(timeline_action[timeline], q = FALSE),
       " is not implemented.",
       call. = FALSE,
       immediate. = TRUE
@@ -398,15 +428,15 @@ rm(miss_cap)
 ## 2) based on storage capacity and dam height                                ##
 # Function to estimate reservoir areas from storage capacity
 area_from_cap <- function(cap) {
-  return((cap / 30.684) ^ (1 / 0.9578))
+  (cap / 30.684) ^ (1 / 0.9578)
 }
 # Function to estimate reservoir areas from storage capacity, dam height
 area_from_cap_height <- function(cap, height) {
-  return(1 / height * (cap / 0.678) ^ (1 / 0.9229))
+  1 / height * (cap / 0.678) ^ (1 / 0.9229)
 }
 miss_area <- which(
   (granddata$AREA_SKM <= 0 | is.na(granddata$AREA_SKM)) &
-  granddata$CAP_MCM > 0
+    granddata$CAP_MCM > 0
 )
 if (length(miss_area) > 0 && fix_area) {
   message(
@@ -467,27 +497,48 @@ check_diag <- function(diagname, run_again) {
         message("Mismatch ", checkvar)
       }
     }
+    if (
+      !identical(check_env$LandInG_version, LandInG_setup$LandInG_version)
+    ) {
+      file_mismatch <- TRUE
+      message("Mismatch LandInG_version")
+    }
     if (!file_mismatch) {
       cat(
-        "Diagnostics file", sQuote(diagname), "exists already and",
+        "Diagnostics file", sQuote(diagname, q = FALSE), "exists already and",
         "appears to have used identical settings. Not processing data again.\n",
-        "Delete or rename file", sQuote(diagname), "to force re-processing.\n"
+        "Delete or rename file", sQuote(diagname, q = FALSE),
+        "to force re-processing.\n"
       )
       run_again <- FALSE
       assign("diagname", diagname, pos = parent.frame())
       rm(check_env)
       return(run_again)
     } else {
+      message(
+        "Settings in existing diagnostics file ", sQuote(diagname, q = FALSE),
+        " do not match current settings. Not using this file."
+      )
       i <- 1
-      while (file.exists(diagname1 <- sub(
-        ".RData", paste0("_", i, ".RData"), diagname, ignore.case = TRUE
-      )) && run_again) {
+      while (
+        file.exists(
+          diagname1 <- sub(
+            ".RData", paste0("_", i, ".RData"), diagname, ignore.case = TRUE
+          )
+        ) && run_again
+      ) {
         run_again <- check_diag(diagname1, run_again)
         i <- i + 1
       }
     }
     if (!file.exists(diagname1) && !grepl("\\d+.RData", diagname)) {
       assign("diagname", diagname1, pos = parent.frame())
+      message(
+        "New file name for diagnostics file: ", sQuote(diagname1, q = FALSE),
+        "\nConsider deleting/archiving previous diagnostics file ",
+        sQuote(diagname, q = FALSE),
+        " to avoid confusion."
+      )
     }
   }
   if (!run_again) {
@@ -495,12 +546,12 @@ check_diag <- function(diagname, run_again) {
   }
   if (exists("check_env"))
     rm(check_env)
-  return(run_again)
+  run_again
 }
 run_again <- check_diag(diagname, run_again)
 if (!run_again) {
   # Reload processed data from previous script run with identical settings
-  cat("Reloading data from", sQuote(diagname), "\n")
+  cat("Reloading data from", sQuote(diagname, q = FALSE), "\n")
   load(diagname)
 } else {
   # Input files created by this script
@@ -513,20 +564,22 @@ if (!run_again) {
       ".bin"
     )
     if (file.exists(lpjml_filename)) {
-      damheader <- read_header(lpjml_filename)
+      damheader <- lpjmlkit::read_header(lpjml_filename)
       check <- c("firstcell", "ncell", "cellsize_lon", "cellsize_lat")
       if (any(damheader$header[check] != gridheader$header[check])) {
         stop(
-          "File dimensions of existing file ", sQuote(lpjml_filename),
-          " do not match grid file ", sQuote(gridname),
+          "File dimensions of existing file ",
+          sQuote(lpjml_filename, q = FALSE),
+          " do not match grid file ", sQuote(gridname, q = FALSE),
           "\nRename existing file so that it can be recreated by this script."
         )
       }
       par_filename <- sub(".bin", "_settings.csv", lpjml_filename, fixed = TRUE)
       if (!file.exists(par_filename)) {
         stop(
-          "File ", sQuote(lpjml_filename),
-          " exists but parameter documentation file ", sQuote(par_filename),
+          "File ", sQuote(lpjml_filename, q = FALSE),
+          " exists but parameter documentation file ",
+          sQuote(par_filename, q = FALSE),
           " is missing.\nDelete existing file to force re-processing."
         )
       } else {
@@ -549,12 +602,13 @@ if (!run_again) {
           )
         )
         filepar <- read.csv(par_filename)
-        if (any(filepar != parameter_doc, na.rm = TRUE) ||
-          !identical(which(is.na(filepar)), which(is.na(parameter_doc)))
+        if (
+          any(filepar != parameter_doc, na.rm = TRUE) ||
+            !identical(which(is.na(filepar)), which(is.na(parameter_doc)))
         ) {
           message(
-            "Error: Parameter settings in ", sQuote(par_filename),
-            "do not match run settings:"
+            "Error: Parameter settings in ", sQuote(par_filename, q = FALSE),
+            " do not match run settings:"
           )
           message("File setting:")
           sink(stderr())
@@ -564,11 +618,12 @@ if (!run_again) {
           sink()
           stop(
             "Change run settings or delete/rename existing files ",
-            sQuote(lpjml_filename), " and ", sQuote(par_filename)
+            sQuote(lpjml_filename, q = FALSE), " and ",
+            sQuote(par_filename, q = FALSE)
           )
         }
         stop(
-          "File ", sQuote(lpjml_filename),
+          "File ", sQuote(lpjml_filename, q = FALSE),
           " exists already with identical run settings.\n",
           "Please remove/rename file to force re-processing."
         )
@@ -589,16 +644,18 @@ if (run_again) {
     "Determining corresponding LPJmL cell for ",
     nrow(granddata), " dams and reservoirs for ",
     nrow(parameter_setting), " combinations of parameters ",
-    toString(sQuote(dimnames(parameter_setting)[[2]])),
+    toString(sQuote(dimnames(parameter_setting)[[2]], q = FALSE)),
     ":\n",
     sep = ""
   )
   print(parameter_setting)
+  cat("Diagnostics will be saved to", sQuote(diagname, q = FALSE), "\n")
   for (r in seq_len(nrow(granddata))) {
     if (is.na(granddata[r, "CELL_ID_GRID"])) {
       message(
         "Skipping dam ", granddata[r, "GRAND_ID"],
-        " because it is out of range of  grid file ", sQuote(gridname)
+        " because it is out of range of  grid file ",
+        sQuote(gridname, q = FALSE)
       )
       next
     }
@@ -606,7 +663,7 @@ if (run_again) {
     # Catchment area according to GRAND
     catch_grand <- granddata[r, "CATCH_SKM"]
     # Upstream area according to LPJmL grid file
-    catch_lpj <- drainage_upstreamarea[granddata[r, "CELL_ID_GRID"]]
+    catch_lpj <- drainage_env$upstreamarea[granddata[r, "CELL_ID_GRID"]]
     granddata[r, "CATCH_AREA_LPJ_GRID"] <- catch_lpj
     if (granddata[r, "GRAND_ID"] %in% manual_assignment$GRAND_ID) {
       # Manual assignment
@@ -615,12 +672,12 @@ if (run_again) {
       granddata[r, cols1] <- manual_assignment[rindex, "CELL_ID_CATCH"]
       cols2 <- paste0("CATCH_AREA_LPJ_BEST", seq_len(nrow(parameter_setting)))
       granddata[r, cols2] <-
-        drainage_upstreamarea[as.integer(granddata[r, cols1])]
+        drainage_env$upstreamarea[as.integer(granddata[r, cols1])]
       cols3 <- paste0("DIST_LPJ_DAM", seq_len(nrow(parameter_setting)))
-      granddata[r, cols3] <- distHaversine(
+      granddata[r, cols3] <- geosphere::distHaversine(
         griddata[as.integer(granddata[r, cols1]), ],
         cbind(x = granddata[r, "LONG_DD"], y = granddata[r, "LAT_DD"]),
-        r = earthradius
+        r = LandInG_setup$earthradius
       )
       message(
         "Assigning dam ", granddata[r, "DAM_NAME"],
@@ -637,36 +694,44 @@ if (run_again) {
     catch_mismatch <- abs((catch_lpj - catch_grand))
     # Find cells within search_rad
     # Westside border
-    lowlon <- (griddata[, "lon"] >=
-      griddata[granddata[r, "CELL_ID_GRID"], "lon"] - search_rad
+    lowlon <- (
+      griddata[, "lon"] >=
+        griddata[granddata[r, "CELL_ID_GRID"], "lon"] - search_rad
     )
     # Eastside border
-    uplon <- (griddata[, "lon"] <=
-      griddata[granddata[r, "CELL_ID_GRID"], "lon"] + search_rad
+    uplon <- (
+      griddata[, "lon"] <=
+        griddata[granddata[r, "CELL_ID_GRID"], "lon"] + search_rad
     )
     # Also cross 180°W/E line
     if (griddata[granddata[r, "CELL_ID_GRID"], "lon"] > 0) {
-      lowlon2 <- (griddata[, "lon"] >=
-        griddata[granddata[r, "CELL_ID_GRID"], "lon"] - search_rad - 360
+      lowlon2 <- (
+        griddata[, "lon"] >=
+          griddata[granddata[r, "CELL_ID_GRID"], "lon"] - search_rad - 360
       )
-      uplon2 <- (griddata[, "lon"] <=
-        griddata[granddata[r, "CELL_ID_GRID"], "lon"] + search_rad - 360
+      uplon2 <- (
+        griddata[, "lon"] <=
+          griddata[granddata[r, "CELL_ID_GRID"], "lon"] + search_rad - 360
       )
     } else {
-      lowlon2 <- (griddata[, "lon"] >=
-        griddata[granddata[r, "CELL_ID_GRID"], "lon"] - search_rad + 360
+      lowlon2 <- (
+        griddata[, "lon"] >=
+          griddata[granddata[r, "CELL_ID_GRID"], "lon"] - search_rad + 360
       )
-      uplon2 <- (griddata[, "lon"] <=
-        griddata[granddata[r, "CELL_ID_GRID"], "lon"] + search_rad + 360
+      uplon2 <- (
+        griddata[, "lon"] <=
+          griddata[granddata[r, "CELL_ID_GRID"], "lon"] + search_rad + 360
       )
     }
     # Southern border
-    lowlat <- (griddata[, "lat"] >=
-      griddata[granddata[r, "CELL_ID_GRID"], "lat"] - search_rad
+    lowlat <- (
+      griddata[, "lat"] >=
+        griddata[granddata[r, "CELL_ID_GRID"], "lat"] - search_rad
     )
     # Northern border
-    uplat <- (griddata[, "lat"] <=
-      griddata[granddata[r, "CELL_ID_GRID"], "lat"] + search_rad
+    uplat <- (
+      griddata[, "lat"] <=
+        griddata[granddata[r, "CELL_ID_GRID"], "lat"] + search_rad
     )
     box_cells <- ((lowlon & uplon) | (lowlon2 & uplon2)) & lowlat & uplat
     # Search environment
@@ -680,10 +745,10 @@ if (run_again) {
       env <- sample(env)
     }
     # Distance between cells in search radius and dam
-    catch_dist_env <- distHaversine(
+    catch_dist_env <- geosphere::distHaversine(
       griddata[env, ],
       cbind(x = granddata[r, "LONG_DD"], y = granddata[r, "LAT_DD"]),
-      r = earthradius
+      r = LandInG_setup$earthradius
     )
     # Enforce maximum distance max_dist if set
     if (is.numeric(max_dist)) {
@@ -692,7 +757,7 @@ if (run_again) {
     }
     # Deviation between upstream areas in search environment and GRanD catchment
     # area
-    catch_mismatch_env <- abs(drainage_upstreamarea[env] - catch_grand)
+    catch_mismatch_env <- abs(drainage_env$upstreamarea[env] - catch_grand)
 
     # Compute weights based on distance_penalty, deviation_penalty, neg_penalty,
     # pos_penalty
@@ -705,7 +770,7 @@ if (run_again) {
             dist_weight <- 1 / (catch_dist_env ^ dis)
             # pos_penalty or neg_penalty
             sign_pen <- ifelse(
-              drainage_upstreamarea[env] < catch_grand,
+              drainage_env$upstreamarea[env] < catch_grand,
               neg,
               pos
             )
@@ -719,7 +784,7 @@ if (run_again) {
             granddata[r, paste0("CELL_ID_CATCH", i)] <-
               env[which.max(weights_env)]
             granddata[r, paste0("CATCH_AREA_LPJ_BEST", i)] <-
-              drainage_upstreamarea[granddata[r, paste0("CELL_ID_CATCH", i)]]
+              drainage_env$upstreamarea[granddata[r, paste0("CELL_ID_CATCH", i)]]
             granddata[r, paste0("DIST_LPJ_DAM", i)] <-
               catch_dist_env[which.max(weights_env)]
             i <- i + 1
@@ -774,7 +839,7 @@ if (run_again) {
                     " (",
                     toString(round(granddata[r, coordcols], 2)),
                     ") has timeline attribute ",
-                    sQuote(granddata$TIMELINE[r]),
+                    sQuote(granddata$TIMELINE[r], q = FALSE),
                     " and will be dropped.",
                     " Review 'timeline_action' if necessary.",
                     call. = FALSE,
@@ -789,9 +854,9 @@ if (run_again) {
                     " (",
                     toString(round(granddata[r, coordcols], 2)),
                     ") has timeline attribute ",
-                    sQuote(granddata$TIMELINE[r]),
+                    sQuote(granddata$TIMELINE[r], q = FALSE),
                     " but defined action ",
-                    sQuote(timeline_action[granddata$TIMELINE[r]]),
+                    sQuote(timeline_action[granddata$TIMELINE[r]], q = FALSE),
                     " is not implemented.",
                     call. = FALSE,
                     immediate. = TRUE
@@ -802,7 +867,8 @@ if (run_again) {
                   "Dam ", granddata[r, "DAM_NAME"],
                   " (",
                   toString(round(granddata[r, coordcols], 2)),
-                  ") has timeline attribute ", sQuote(granddata$TIMELINE[r]),
+                  ") has timeline attribute ",
+                  sQuote(granddata$TIMELINE[r], q = FALSE),
                   " for which no action is defined in 'timeline_action'",
                   call. = FALSE,
                   immediate. = TRUE
@@ -998,10 +1064,14 @@ if (run_again) {
 if (run_again) {
   output_array <- array(
     0,
-    dim = c(gridheader$header["ncell"], 10, nrow(parameter_setting)),
+    dim = c(
+      cell = gridheader$header["ncell"],
+      band = 10,
+      run = nrow(parameter_setting)
+    ),
     dimnames = list(
-      NULL,
-      c(
+      cell = NULL,
+      band = c(
         "year",
         "capacity",
         "area",
@@ -1009,7 +1079,7 @@ if (run_again) {
         "height",
         paste0("purpose", seq_len(5))
       ),
-      NULL
+      run = NULL
     )
   )
   # Assign data from loops above
@@ -1031,13 +1101,13 @@ for (i in seq_len(nrow(parameter_setting))) {
   if (is.numeric(minimum_startyear)) {
     year_mismatch <- which(
       output_array[, "capacity", i] > 0 &
-      output_array[, "year", i] < minimum_startyear
+        output_array[, "year", i] < minimum_startyear
     )
     if (length(year_mismatch) > 0) {
       cat(
         "Resetting start year for", length(year_mismatch),
         "reservoirs to minimum_startyear", minimum_startyear,
-        "for parameter combination:"
+        "for parameter combination:\n"
       )
       print(parameter_setting[i, ])
       output_array[year_mismatch, "year", i] <- minimum_startyear
@@ -1067,7 +1137,7 @@ for (i in seq_len(nrow(parameter_setting))) {
 ## separately.                                                                ##
 ## This part is specific to the reservoir input format used by LPJmL.         ##
 # Create file header in LPJmL input format
-damheader <- create_header(
+damheader <- lpjmlkit::create_header(
   name = headername,
   version = bintype,
   order = 0,
@@ -1080,7 +1150,7 @@ damheader <- create_header(
   nbands = 10,
   cellsize_lon = gridheader$header["cellsize_lon"],
   cellsize_lat = gridheader$header["cellsize_lat"],
-  datatype = 1
+  datatype = 3
 )
 for (i in seq_len(nrow(parameter_setting))) {
   lpjml_filename <- paste0(
@@ -1116,7 +1186,7 @@ for (i in seq_len(nrow(parameter_setting))) {
       row.names = FALSE
     )
     # Write header to file
-    write_header(lpjml_filename, damheader, overwrite = TRUE)
+    lpjmlkit::write_header(lpjml_filename, damheader, overwrite = TRUE)
     # Add data
     damfile <- file(lpjml_filename, "ab")
     for (c in seq_len(damheader$header["ncell"])) {
@@ -1132,14 +1202,14 @@ for (i in seq_len(nrow(parameter_setting))) {
       )
       # capacity, area as float
       writeBin(
-        as.double(output_array[c, 2:3, i]),
+        as.double(output_array[c, c(2, 3), i]),
         damfile,
         size = 4,
         endian = damheader$endian
       )
       # inst_cap, height, purpose as integer
       writeBin(
-        as.integer(output_array[c, 4:10, i]),
+        as.integer(output_array[c, seq(4, 10), i]),
         damfile,
         size = 4,
         endian = damheader$endian
@@ -1147,14 +1217,19 @@ for (i in seq_len(nrow(parameter_setting))) {
     }
     close(damfile)
     cat(
-      "Data saved to", sQuote(lpjml_filename),
+      "Data saved to", sQuote(lpjml_filename, q = FALSE),
       "and corresponding parameter settings saved to",
-      sQuote(sub(".bin", "_settings.csv", lpjml_filename, fixed = TRUE)), "\n"
+      sQuote(
+        sub(".bin", "_settings.csv", lpjml_filename, fixed = TRUE),
+        q = FALSE
+      ),
+      "\n"
     )
   } else {
     message(
-      "File ", toString(sQuote(lpjml_filename)), " exists already and is not ",
-      "generated again.\nDelete or rename to force recreation of file."
+      "File ", toString(sQuote(lpjml_filename, q = FALSE)),
+      " exists already and is not generated again.",
+      "\nDelete or rename to force recreation of file."
     )
   }
 }
@@ -1168,10 +1243,10 @@ if (run_again) {
     GRAND_ID = granddata$GRAND_ID,
     # Distance between dam and its grid center point, comparable to
     # DIST_LPJ_DAM* columns but without relocation to better match upstream area
-    dist_grid = distHaversine(
+    dist_grid = geosphere::distHaversine(
       granddata[, coordcols],
       griddata[granddata$CELL_ID_GRID, ],
-      r = earthradius
+      r = LandInG_setup$earthradius
     ),
     # Relative deviation between GRanD catchment area and DDM-derived upstream
     # area for grid cell in which dam coordinates are located
@@ -1183,10 +1258,12 @@ if (run_again) {
       granddata$CATCH_AREA_LPJ_GRID - granddata$CATCH_SKM
     ) / pmax(
       granddata$CATCH_SKM,
-      cellarea(
+      lpjmlkit::calc_cellarea(
         griddata[granddata$CELL_ID_GRID, "lat"],
-        xres(gridraster),
-        yres(gridraster)
+        terra::xres(gridraster),
+        terra::yres(gridraster),
+        earth_radius = LandInG_setup$earthradius,
+        return_unit = "m2"
       ) * conversion_factor_area
     )
   )
@@ -1200,10 +1277,12 @@ if (run_again) {
       (granddata[, paste0("CATCH_AREA_LPJ_BEST", i)] - granddata$CATCH_SKM) /
         pmax(
           granddata$CATCH_SKM,
-          cellarea(
+          lpjmlkit::calc_cellarea(
             griddata[granddata$CELL_ID_GRID, "lat"],
-            xres(gridraster),
-            yres(gridraster)
+            terra::xres(gridraster),
+            terra::yres(gridraster),
+            earth_radius = LandInG_setup$earthradius,
+            return_unit = "m2"
           ) * conversion_factor_area
         )
     )
@@ -1230,11 +1309,15 @@ savevar <- c(
   "output_array",
   paste0("lpjdamsdata", seq_len(nrow(parameter_setting))),
   paste0("lpjdamsdata_unmerged", seq_len(nrow(parameter_setting))),
-  "diagnostics_table"
+  "diagnostics_table",
+  "LandInG_version"
 )
-cat("Saving run diagnostics to", sQuote(diagname), "\n")
+LandInG_version <- LandInG_setup$LandInG_version
+cat("Saving run diagnostics to", sQuote(diagname, q = FALSE), "\n")
 save(list = savevar, file = diagname)
+rm(LandInG_version)
 ################################################################################
+
 
 ################################################################################
 ## Plot dam locations and reservoirs to allow visual inspection of cell       ##
@@ -1243,14 +1326,16 @@ save(list = savevar, file = diagname)
 # PDF file with map plots for dam locations
 pdfname <- sub(".RData", ".pdf", diagname, ignore.case = TRUE)
 # If sf package supports s2 (which depends on package version) switch it off
-if (exists("sf_use_s2")) {
-  sf_use_s2(FALSE)
+if ("sf_use_s2" %in% getNamespaceExports("sf")) {
+  sf::sf_use_s2(FALSE)
 }
 if (!file.exists(pdfname)) {
   # Color scale from RColorBrewer
-  col_scale <- colorRampPalette(c("grey95", brewer.pal(9, "YlGnBu")))
+  col_scale <- colorRampPalette(
+    c("grey95", RColorBrewer::brewer.pal(9, "YlGnBu"))
+  )
   # Load polyon shapes of reservoirs
-  grand_reservoir_shape <- st_read(
+  grand_reservoir_shape <- sf::st_read(
     sub(
       "_dams",
       "_reservoirs",
@@ -1259,22 +1344,28 @@ if (!file.exists(pdfname)) {
     )
   )
   # Simplify shapes for plotting
-  grand_reservoir_shape <- st_simplify(
+  if (any(!sf::st_is_valid(grand_reservoir_shape))) {
+    if (!"st_make_valid" %in% getNamespaceExports("sf")) {
+      grand_reservoir_shape <- lwgeom::st_make_valid(grand_reservoir_shape)
+    } else {
+      grand_reservoir_shape <- sf::st_make_valid(grand_reservoir_shape)
+    }
+  }
+  grand_reservoir_shape <- sf::st_simplify(
     grand_reservoir_shape,
     preserveTopology = TRUE,
-    dTolerance = 0.01
+    dTolerance = search_rad * 2 / 100
   )
-  if (any(!st_is_valid(grand_reservoir_shape)))
-    grand_reservoir_shape <- st_make_valid(grand_reservoir_shape)
   # Create raster of upstream areas
-  upstreamarea <- raster(gridraster)
-  upstreamarea[cellFromXY(upstreamarea, griddata)] <- drainage_upstreamarea
+  upstreamarea <- terra::rast(gridraster)
+  upstreamarea[terra::cellFromXY(upstreamarea, griddata)] <-
+    drainage_env$upstreamarea
   # Function to retrieve attributes from lpjdamsdata list object
   return_att <- function(indata, att) {
     if (is.array(indata)) {
-      return(indata[grep(att, rownames(indata)), ])
+      indata[grep(att, rownames(indata)), ]
     } else {
-      return(indata[att])
+      indata[att]
     }
   }
   # Set up individual plots.
@@ -1285,24 +1376,24 @@ if (!file.exists(pdfname)) {
     # Find GRanD IDs closeby to combine dams that are located close together
     closeby <- which(
       abs(granddata$LONG_DD[r] - granddata$LONG_DD) < 1 &
-      abs(granddata$LAT_DD[r] - granddata$LAT_DD) < 1
+        abs(granddata$LAT_DD[r] - granddata$LAT_DD) < 1
     )
     # Do not add IDs of reservoirs that are already in another plot
     neighbour_ids <- setdiff(granddata$GRAND_ID[closeby], unlist(plots))
     # Closest 5 if more than 5
     if (length(neighbour_ids) > 5) {
-      neighbour_dist <- distHaversine(
+      neighbour_dist <- geosphere::distHaversine(
         granddata[match(neighbour_ids, granddata$GRAND_ID), coordcols],
         granddata[r, coordcols],
-        r = earthradius
+        r = LandInG_setup$earthradius
       )
-      neighbour_ids <- neighbour_ids[order(neighbour_dist)[1:5]]
+      neighbour_ids <- neighbour_ids[order(neighbour_dist)[seq_len(5)]]
     }
     if (length(neighbour_ids) > 0) {
       plots[[length(plots) + 1]] <- neighbour_ids
     }
   }
-  cat("Plotting dam to cell assignments to", sQuote(pdfname), "\n")
+  cat("Plotting dam to cell assignments to", sQuote(pdfname, q = FALSE), "\n")
   pdf(pdfname, width = 11, height = 7, pointsize = 10, compress = TRUE)
   par(
     mfrow = c(3, 4),
@@ -1319,30 +1410,30 @@ if (!file.exists(pdfname)) {
     if (length(plot_cells) > 1) {
       plotcenter <- apply(
         griddata[plot_cells, ],
-        2,
-        function(indata) return(mean(range(indata)))
+        "band",
+        function(indata) mean(range(indata))
       )
     } else {
       plotcenter <- griddata[plot_cells, ]
     }
-    plotextent <- extent(
+    plotextent <- terra::ext(
       rep(plotcenter, each = 2) + c(-1.1 * search_rad, 1.1 * search_rad)
     )
-    xmin(plotextent) <- min(
-      xmin(plotextent),
-      min(griddata[plot_cells, "lon"]) - xres(gridraster) / 2
+    terra::xmin(plotextent) <- min(
+      terra::xmin(plotextent),
+      min(griddata[plot_cells, "lon"]) - terra::xres(gridraster) / 2
     )
-    xmax(plotextent) <- max(
-      xmax(plotextent),
-      max(griddata[plot_cells, "lon"]) + xres(gridraster) / 2
+    terra::xmax(plotextent) <- max(
+      terra::xmax(plotextent),
+      max(griddata[plot_cells, "lon"]) + terra::xres(gridraster) / 2
     )
-    ymin(plotextent) <- min(
-      ymin(plotextent),
-      min(griddata[plot_cells, "lat"]) - yres(gridraster) / 2
+    terra::ymin(plotextent) <- min(
+      terra::ymin(plotextent),
+      min(griddata[plot_cells, "lat"]) - terra::yres(gridraster) / 2
     )
-    ymax(plotextent) <- max(
-      ymax(plotextent),
-      max(griddata[plot_cells, "lat"]) + yres(gridraster) / 2
+    terra::ymax(plotextent) <- max(
+      terra::ymax(plotextent),
+      max(griddata[plot_cells, "lat"]) + terra::yres(gridraster) / 2
     )
     # Plot dam locations for each parameter combination (if different from the
     # other parameter combinations)
@@ -1356,8 +1447,10 @@ if (!file.exists(pdfname)) {
       setting_identical <- integer(0)
       for (j in seq_len(nrow(parameter_setting))) {
         if (
-          identical(lpjdamsdata_unmerged[plot_cells],
-          get(paste0("lpjdamsdata_unmerged", j))[plot_cells])
+          identical(
+            lpjdamsdata_unmerged[plot_cells],
+            get(paste0("lpjdamsdata_unmerged", j))[plot_cells]
+          )
         ) {
           setting_identical <- c(setting_identical, j)
         }
@@ -1368,16 +1461,25 @@ if (!file.exists(pdfname)) {
       }
       par(mar = c(0.25, 0.25, 0.25, 6))
       # Plot basemap of upstream area
-      plot(
-        crop(upstreamarea, plotextent),
-        axes = FALSE, col = col_scale(255), useRaster = TRUE,
-        smallplot = c(0.775, 0.8, 0.4, 0.95), bigplot = c(0, 0.75, 0.01, 0.99),
-        graphics.reset = FALSE
+      terra::plot(
+        x = terra::crop(upstreamarea, plotextent), y = 1,
+        type = "continuous",
+        col = col_scale(255),
+        plg = list(
+          x = "topright",
+          size = c(1, 0.55),
+          nudge = c(0.1, -0.05),
+          cex = 1.25
+        ),
+        mar = c(0.25, 0.25, 0.25, 6),
+        reset = FALSE,
+        axes = FALSE, box = FALSE,
+        asp = 1
       )
       # Add reservoir shapes
       r <- match(plots[[p]], grand_reservoir_shape$GRAND_ID)
       plot(
-        st_geometry(grand_reservoir_shape[r, "GRAND_ID"]),
+        sf::st_geometry(grand_reservoir_shape[r, "GRAND_ID"]),
         add = TRUE,
         lwd = 0.1,
         col = NA,
@@ -1390,10 +1492,13 @@ if (!file.exists(pdfname)) {
       # reduce the size of the PDF file. Call may fail if no country borders are
       # in range.
       try(
-        map(add = TRUE, col = "grey40", lty = 2, lwd = 0.5, resolution = 1,
-            xlim = (plotextent + 2)[1:2], ylim = (plotextent + 2)[3:4]),
+        maps::map(
+          add = TRUE, col = "grey40", lty = 2, lwd = 0.5, resolution = 2,
+          xlim = (plotextent + 2)[c(1, 2)], ylim = (plotextent + 2)[c(3, 4)]
+        ),
         silent = TRUE
       )
+      box()
       # Add point symbols at dam coordinates from GRanD
       r <- match(plots[[p]], granddata$GRAND_ID)
       points(
@@ -1416,7 +1521,8 @@ if (!file.exists(pdfname)) {
         x = grconvertX(0, "npc", "user"),
         y = grconvertY(0.95, "npc", "user"),
         labels = "LPJmL",
-        col = "red", pos = 4, cex = 0.85
+        col = "red", pos = 4, cex = 0.85,
+        xpd = NA
       )
       text(
         x = grconvertX(0, "npc", "user"),
@@ -1432,13 +1538,14 @@ if (!file.exists(pdfname)) {
             att = "GRAND_ID"
           ),
           area = paste0(
-            round(drainage_upstreamarea[par_cells], 1),
+            round(drainage_env$upstreamarea[par_cells], 1),
             grand_area_unit
           )
         ))),
         col = "red",
         pos = 4,
-        cex = 0.75
+        cex = 0.75,
+        xpd = NA
       )
       # Add arrows from text labels to corresponding point symbols of assigned
       # grid cell
@@ -1465,7 +1572,8 @@ if (!file.exists(pdfname)) {
         x = grconvertX(1, "npc", "user"),
         y = grconvertY(0.95, "npc", "user"),
         labels = "GRanD",
-        col = "black", pos = 2, cex = 0.85
+        col = "black", pos = 2, cex = 0.85,
+        xpd = NA
       )
       text(
         x = grconvertX(1, "npc", "user"),
@@ -1478,7 +1586,8 @@ if (!file.exists(pdfname)) {
           ID = plots[[p]],
           area = paste0(round(granddata[r, "CATCH_SKM"], 1), grand_area_unit)
         ))),
-        col = "black", pos = 2, cex = 0.75
+        col = "black", pos = 2, cex = 0.75,
+        xpd = NA
       )
       # Add arrows from text labels to GRanD coordinates
       arrows(
@@ -1549,7 +1658,7 @@ if (!file.exists(pdfname)) {
   dev.off()
 } else {
   message(
-    "Diagnostics plots exist already in ", sQuote(pdfname),
+    "Diagnostics plots exist already in ", sQuote(pdfname, q = FALSE),
     ".\nSkipping file creation."
   )
 }
